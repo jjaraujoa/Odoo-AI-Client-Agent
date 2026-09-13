@@ -1,0 +1,71 @@
+{
+  "id": "94bf7a86-528d-4190-9c4f-dc958d730df8",
+  "name": "Odoo AI Agent - Salud local",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "b5e4f4ce-0ce3-4f99-9964-58bd4fd222f6",
+      "name": "Cada 15 minutos",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -288,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://control-api:8080/health",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "34c0defa-03de-4744-983b-686cce065a12",
+      "name": "Comprobar control-api",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000
+    }
+  ],
+  "connections": {
+    "Cada 15 minutos": {
+      "main": [
+        [
+          {
+            "node": "Comprobar control-api",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": false,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "active": false,
+  "versionId": "8947469c-849e-4c1a-ae26-6f510e76d581",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "pilot": "odoo-ai-agent"
+  },
+  "tags": []
+}

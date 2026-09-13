@@ -1,0 +1,20 @@
+{
+  "name": "odoo-ai-agent-control-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.9.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test --test-isolation=none --test-reporter=spec",
+    "check": "node --check src/server.js && node --test --test-isolation=none",
+    "evaluate:read-planner": "node scripts/evaluate-read-planner.js",
+    "smoke:read-agent": "node scripts/smoke-read-agent.js"
+  },
+  "dependencies": {
+    "pg": "8.16.3"
+  }
+}

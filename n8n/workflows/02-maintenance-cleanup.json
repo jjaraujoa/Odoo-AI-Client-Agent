@@ -1,0 +1,75 @@
+{
+  "id": "48dc12c5-709b-4df3-85b4-a6d6e5f01378",
+  "name": "Odoo AI Agent - Limpieza",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "487ab108-8d7f-4759-a144-46d35721d3c1",
+      "name": "Cada hora",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -288,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://control-api:8080/v1/maintenance/cleanup",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": false,
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "86361666-a9bc-48c1-909d-b329bf2d5caa",
+      "name": "Limpiar datos vencidos",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    }
+  ],
+  "connections": {
+    "Cada hora": {
+      "main": [
+        [
+          {
+            "node": "Limpiar datos vencidos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": false,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "active": false,
+  "versionId": "6d486a59-9d5e-4235-b175-bad0cad1ea47",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "pilot": "odoo-ai-agent"
+  },
+  "tags": []
+}

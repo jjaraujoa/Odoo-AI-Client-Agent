@@ -1,0 +1,9 @@
+{
+  "format": "odooai-public-key",
+  "version": 1,
+  "algorithm": "RSA-3072-OAEP-SHA256",
+  "key_id": "772e11e688150f3cdd2484c0f39a1c26d5be10300115d06d751175c79dedc8f0",
+  "material_fingerprint": "8274ba9929378daa04824e27dd4d13519d959b61697906561329bf2191d2eb77",
+  "n": "5WuZTkiofyMTMdDiBvuIP4XSpBeb_yhvY-g8tnPYRyFRVv6ZlpvQUTeBRH-5Cp2WansGjrCpXg8m9mxZn4KPkZ4smhk6FGFvdLiUp5cNOeXKzthRIem8xb12ZBtFKT20Mw7ohh18cyYGM36EttY0uQvwc0_oDMBcEl6DK6BZT84sct2IicnjA2pPE5QBX-Zd9vhdK9afzlK9Zr1Cdx0ga-A9tHheZNs_g4ofSkxtBFLDIWX1uWfKzyYTChWIEQ4bSmoy-bJyPqSO1bu-TeNiFa8HUClikggsl3o5-mA_hieSu2dpF6u8XHTZh6Pw3Qo5X_E9wcKSKGT-Tp1UxgFZGKnEWkdysomhXAyIB6cGk9P_ueBxMRY5uXrPqyc6TyBUdN4DQ0cODgEuuDJTQDF3taORP4ASKVYVRqcx5B44xXeOevtCrkMvvRTCo6tlGnsIJugntyTj8tgcbFy5XMSfnZ15w-VK7rAX5jv38jkCZm3spqjUr0XA-39JlJPOEFpp",
+  "e": "AQAB"
+}

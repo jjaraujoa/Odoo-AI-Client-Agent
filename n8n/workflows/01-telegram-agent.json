@@ -1,0 +1,102 @@
+{
+  "id": "0a7f9d6e-42ac-4c46-9578-9dd830d375a1",
+  "name": "Odoo AI Agent - Telegram",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "odoo-ai-telegram",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "8e39e314-5047-4307-8737-02ab3ce69870",
+      "name": "Webhook Telegram",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -480,
+        0
+      ],
+      "webhookId": "45129c1a-896c-4091-b146-968b1a1c6f4a"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://control-api:8080/v1/telegram/process",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ update: $json.body, telegram_webhook_secret: $json.headers['x-telegram-bot-api-secret-token'] }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "a49417c6-769d-4e22-b89d-99764d678ee5",
+      "name": "Capa de control",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -208,
+        0
+      ],
+      "retryOnFail": false
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true }) }}",
+        "options": {}
+      },
+      "id": "d12603b0-849f-4c21-94ee-a926229a48e0",
+      "name": "Confirmar recepción",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        80,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Telegram": {
+      "main": [
+        [
+          {
+            "node": "Capa de control",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Capa de control": {
+      "main": [
+        [
+          {
+            "node": "Confirmar recepción",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": false,
+    "saveDataErrorExecution": "none",
+    "saveDataSuccessExecution": "none",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "active": false,
+  "versionId": "4b7b70e9-55bb-4d88-b131-b837e77f7a57",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "pilot": "odoo-ai-agent",
+    "telegramTokenStoredOutsideN8n": true
+  },
+  "tags": []
+}

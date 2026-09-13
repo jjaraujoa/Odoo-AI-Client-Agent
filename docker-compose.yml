@@ -1,0 +1,144 @@
+name: ${COMPOSE_PROJECT_NAME:-odoo_ai_agent_pilot}
+
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:17.10-alpine}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: ${TZ:-America/Bogota}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - private
+
+  control-api:
+    build:
+      context: ./control-api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 8080
+      TZ: ${TZ:-America/Bogota}
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      CONTROL_API_INTERNAL_KEY: ${CONTROL_API_INTERNAL_KEY}
+      CONTROL_API_ADMIN_KEY: ${CONTROL_API_ADMIN_KEY}
+      ODOO_CREDENTIAL_MASTER_KEY_B64: ${ODOO_CREDENTIAL_MASTER_KEY_B64}
+      N8N_WEBHOOK_URL: ${N8N_WEBHOOK_URL}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      MAX_DOCUMENT_BYTES: ${MAX_DOCUMENT_BYTES:-5242880}
+      MAX_DOCUMENT_PAGES: ${MAX_DOCUMENT_PAGES:-10}
+      CLAMAV_HOST: ${CLAMAV_HOST:-clamav}
+      CLAMAV_PORT: ${CLAMAV_PORT:-3310}
+      CLAMAV_REQUIRED: ${CLAMAV_REQUIRED:-true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clamav:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${CONTROL_API_PORT:-8080}:8080"
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - private
+      - public
+
+  clamav:
+    image: ${CLAMAV_IMAGE:-clamav/clamav:1.5.2}
+    restart: unless-stopped
+    environment:
+      CLAMAV_NO_MILTERD: "true"
+      FRESHCLAM_CHECKS: "1"
+    volumes:
+      - clamav_data:/var/lib/clamav
+    networks:
+      - private
+      - public
+
+  n8n:
+    image: ${N8N_IMAGE:-docker.n8n.io/n8nio/n8n:2.30.5}
+    restart: unless-stopped
+    environment:
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: ${POSTGRES_DB}
+      DB_POSTGRESDB_USER: ${POSTGRES_USER}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_POSTGRESDB_SCHEMA: n8n
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      N8N_HOST: localhost
+      N8N_LISTEN_ADDRESS: 0.0.0.0
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      N8N_WEBHOOK_URL: ${N8N_WEBHOOK_URL}
+      N8N_EDITOR_BASE_URL: http://localhost:${N8N_PORT:-5678}
+      GENERIC_TIMEZONE: ${TZ:-America/Bogota}
+      TZ: ${TZ:-America/Bogota}
+      EXECUTIONS_DATA_SAVE_ON_SUCCESS: none
+      EXECUTIONS_DATA_SAVE_ON_ERROR: all
+      EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS: true
+      EXECUTIONS_DATA_PRUNE: true
+      EXECUTIONS_DATA_MAX_AGE: ${N8N_EXECUTION_ERROR_RETENTION_HOURS:-168}
+      N8N_DEFAULT_BINARY_DATA_MODE: filesystem
+      N8N_DIAGNOSTICS_ENABLED: false
+      N8N_PERSONALIZATION_ENABLED: false
+      N8N_TEMPLATES_ENABLED: false
+      N8N_UNVERIFIED_PACKAGES_ENABLED: "false"
+      N8N_RUNNERS_TASK_TIMEOUT: "60"
+      N8N_COMPRESSION_NODE_MAX_DECOMPRESSED_SIZE_BYTES: "268435456"
+      N8N_COMPRESSION_NODE_MAX_ZIP_ENTRIES: "1000"
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: true
+      N8N_BLOCK_FILE_ACCESS_TO_N8N_FILES: true
+      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: true
+      N8N_ENFORCE_GLOBAL_USER_AGENT: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      control-api:
+        condition: service_started
+    ports:
+      - "127.0.0.1:${N8N_PORT:-5678}:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n/workflows:/workflows:ro
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - private
+      - public
+
+  cloudflared:
+    image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.7.2}
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - n8n
+    networks:
+      - public
+
+volumes:
+  postgres_data:
+  n8n_data:
+  clamav_data:
+
+networks:
+  private:
+    internal: true
+  public:
