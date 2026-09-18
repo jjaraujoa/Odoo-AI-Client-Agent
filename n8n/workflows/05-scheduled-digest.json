@@ -1,0 +1,66 @@
+{
+  "id": "7c13a245-89db-4ef2-a398-45d1798319e0",
+  "name": "Odoo AI Agent - Digest Operativo Programado",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8,17 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "92da1578-4309-4158-ba5a-5287e02931a2",
+      "name": "Cron Matutino y Cierre",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -320,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://control-api:8080/v1/digest/generate",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ client_slug: $env.DEFAULT_CLIENT_SLUG || \"piloto\", role: \"general\" }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "4e18321a-689b-44ec-b75d-6c17e9231802",
+      "name": "Generar Digest en control-api",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        0,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    }
+  ],
+  "connections": {
+    "Cron Matutino y Cierre": {
+      "main": [
+        [
+          {
+            "node": "Generar Digest en control-api",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
