@@ -17,6 +17,8 @@ import {
   revokeLinkedUser,
   validateModels,
 } from "./admin.js";
+import { processOdooEvent } from "./events.js";
+import { generateOperationalDigest } from "./digest.js";
 
 const config = loadConfig();
 const db = createDb(config.databaseUrl);
@@ -66,6 +68,23 @@ const server = createServer(async (request, response) => {
       requireInternal(request);
       const body = await readJson(request, 2_000_000);
       return json(response, 200, await telegram.process(body));
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/events/odoo") {
+      requireInternal(request);
+      const body = await readJson(request, 2_000_000);
+      return json(response, 200, await processOdooEvent({ db, config, body }));
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/digest/generate") {
+      requireInternal(request);
+      const body = await readJson(request, 500_000);
+      return json(response, 200, await generateOperationalDigest({
+        db,
+        config,
+        clientSlug: body.client_slug,
+        role: body.role || "general",
+      }));
     }
 
     if (request.method === "POST" && url.pathname === "/v1/maintenance/cleanup") {
