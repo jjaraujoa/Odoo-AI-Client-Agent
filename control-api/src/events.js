@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { AppError } from "./errors.js";
-import { decryptNamedSecret } from "./crypto.js";
+import { decryptNamedSecret, decryptSecret } from "./crypto.js";
 import { buildOdooDeepLink, dispatchNotification, formatEventNotificationText } from "./notifications.js";
 import { OdooJson2Client } from "./odoo.js";
+import { processEventThroughWorkflows } from "./workflow-engine.js";
 
 export function computeEventFingerprint(clientId, model, resId, payload) {
   const content = [
@@ -216,11 +217,49 @@ export async function processOdooEvent({ db, config, body }) {
     }
   }
 
+  // 6. Evaluación y ejecución de flujos de trabajo declarativos (Fase 4)
+  let workflowExecutions = null;
+  try {
+    const userRes = await db.query(
+      `SELECT u.*, c.ciphertext, c.nonce, c.auth_tag, c.key_version
+         FROM agent.linked_users u
+         JOIN agent.odoo_credentials c ON c.linked_user_id = u.id
+        WHERE u.client_id = $1 AND u.active
+        ORDER BY u.created_at ASC LIMIT 1`,
+      [client.id],
+    );
+    let odooClient = null;
+    if (userRes.rows[0]) {
+      const apiKey = decryptSecret(userRes.rows[0], config.credentialMasterKey);
+      odooClient = new OdooJson2Client({
+        baseUrl: client.odoo_base_url,
+        database: client.odoo_database,
+        apiKey,
+      });
+    }
+    workflowExecutions = await processEventThroughWorkflows({
+      db,
+      config,
+      odoo: odooClient,
+      client,
+      event: {
+        model,
+        res_id: recordId,
+        event: event_type,
+        values: body.fields || {},
+        write_uid,
+      },
+    });
+  } catch (wfErr) {
+    process.stderr.write(`[events] Error evaluando flujos para ${model}:${recordId}: ${wfErr.message}\n`);
+  }
+
   return {
     event_id: eventId,
     status: ["critical", "high"].includes(priority) ? "processed" : "pending",
     priority,
     dispatched_channels: dispatchedChannels,
     deep_link: deepLink,
+    workflows: workflowExecutions,
   };
 }

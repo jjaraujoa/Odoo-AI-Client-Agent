@@ -15,6 +15,7 @@
     "smoke:read-agent": "node scripts/smoke-read-agent.js"
   },
   "dependencies": {
-    "pg": "8.16.3"
+    "pg": "8.16.3",
+    "yaml": "^2.9.1"
   }
 }

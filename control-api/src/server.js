@@ -23,6 +23,8 @@ import { generateOperationalDigest } from "./digest.js";
 import { requestOrExecuteAction, confirmOperationalAction } from "./governance.js";
 import { answerSopQuery } from "./sops.js";
 import { runFullBusinessAudit } from "./audit-business.js";
+import { parseWorkflowYaml } from "./workflow-parser.js";
+import { loadWorkflowsForClient } from "./workflow-engine.js";
 
 const config = loadConfig();
 const db = createDb(config.databaseUrl);
@@ -219,6 +221,23 @@ const server = createServer(async (request, response) => {
         clientId: client.id,
         reportType: body.report_type || "full",
       }));
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/workflows/validate") {
+      requireInternal(request);
+      const body = await readJson(request);
+      const parsed = parseWorkflowYaml(body.yaml);
+      return json(response, 200, { valid: true, workflow: parsed });
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/workflows/list") {
+      requireInternal(request);
+      const body = await readJson(request);
+      const clientRes = await db.query("SELECT * FROM agent.clients WHERE slug = $1 AND active", [body.client_slug]);
+      const client = clientRes.rows[0];
+      if (!client) throw new AppError(404, "client_not_found", "Cliente no encontrado.");
+      const workflows = await loadWorkflowsForClient(db, client);
+      return json(response, 200, { client_slug: body.client_slug, count: workflows.length, workflows });
     }
 
     throw new AppError(404, "not_found", "Ruta no encontrada.");
