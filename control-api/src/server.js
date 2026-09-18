@@ -21,6 +21,8 @@ import {
 import { processOdooEvent } from "./events.js";
 import { generateOperationalDigest } from "./digest.js";
 import { requestOrExecuteAction, confirmOperationalAction } from "./governance.js";
+import { answerSopQuery } from "./sops.js";
+import { runFullBusinessAudit } from "./audit-business.js";
 
 const config = loadConfig();
 const db = createDb(config.databaseUrl);
@@ -177,6 +179,45 @@ const server = createServer(async (request, response) => {
       const odoo = new OdooJson2Client({ baseUrl: client.odoo_base_url, database: client.odoo_database, apiKey });
       return json(response, 200, await confirmOperationalAction({
         db, odoo, actionId: body.action_id, confirmationCode: body.confirmation_code,
+      }));
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/sops/search") {
+      requireInternal(request);
+      const body = await readJson(request);
+      const clientRes = await db.query("SELECT * FROM agent.clients WHERE slug = $1 AND active", [body.client_slug]);
+      const client = clientRes.rows[0];
+      if (!client) throw new AppError(404, "client_not_found", "Cliente no encontrado.");
+      return json(response, 200, await answerSopQuery({
+        db,
+        clientId: client.id,
+        query: body.query || "",
+        category: body.category,
+      }));
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/audit/business/run") {
+      requireAdmin(request);
+      const body = await readJson(request);
+      const clientRes = await db.query("SELECT * FROM agent.clients WHERE slug = $1 AND active", [body.client_slug]);
+      const client = clientRes.rows[0];
+      if (!client) throw new AppError(404, "client_not_found", "Cliente no encontrado.");
+      const userRes = await db.query(
+        `SELECT u.*, c.ciphertext, c.nonce, c.auth_tag, c.key_version
+           FROM agent.linked_users u
+           JOIN agent.odoo_credentials c ON c.linked_user_id = u.id
+          WHERE u.client_id = $1 AND u.active
+          ORDER BY u.created_at ASC LIMIT 1`,
+        [client.id],
+      );
+      if (!userRes.rows[0]) throw new AppError(403, "no_credentials", "No hay credenciales activas.");
+      const apiKey = decryptSecret(userRes.rows[0], config.credentialMasterKey);
+      const odoo = new OdooJson2Client({ baseUrl: client.odoo_base_url, database: client.odoo_database, apiKey });
+      return json(response, 200, await runFullBusinessAudit({
+        db,
+        odoo,
+        clientId: client.id,
+        reportType: body.report_type || "full",
       }));
     }
 
