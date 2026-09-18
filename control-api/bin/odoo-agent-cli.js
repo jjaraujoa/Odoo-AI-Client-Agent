@@ -1,25 +1,51 @@
 #!/usr/bin/env node
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, copyFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { parseWorkflowYaml, evaluateCondition } from "../src/workflow-parser.js";
 import { loadConfig } from "../src/config.js";
 import { createDb } from "../src/db.js";
 import { decryptSecret } from "../src/crypto.js";
 import { OdooJson2Client } from "../src/odoo.js";
+import { readClientWorkbook, syncUsersFromWorkbook } from "../src/excel-importer.js";
+
+const DEFAULT_CLIENTS_ROOT = "/Users/jorgearaujo/Proyectos/XETA/Clientes";
+const TEMPLATE_EXCEL_PATH = resolve(import.meta.dirname, "../../onboarding/consultant-kit/Cliente-PRG-Piloto.xlsx");
+
+function getClientDirectory(slug, args = {}, options = {}) {
+  if (args["target-dir"]) {
+    return resolve(options.baseDir || process.cwd(), args["target-dir"]);
+  }
+  if (options.baseDir) {
+    return join(options.baseDir, "clients", slug);
+  }
+  return join(DEFAULT_CLIENTS_ROOT, slug);
+}
 
 function printHelp() {
   console.log(`
-🛠️  odoo-agent-cli: Herramienta de Consultoría y Creación de Flujos de Negocio
+🛠️  odoo-agent-cli: Herramienta de Consultoría, Instalación y Creación de Flujos
 
 USO:
-  odoo-agent-cli <comando> [opciones]
+  odoo-agent-cli <comando> [subcomando] [opciones]
 
-COMANDOS:
+COMANDOS DE CLIENTE:
+  client init --slug <slug> --name <nombre> --url <url> --db <bd> [--bot-uid <id>]
+      Inicializa la carpeta aislada del cliente en Clientes/<slug>/, copia la plantilla
+      empleados.xlsx (con ejemplos), genera cliente.yaml, .env.example y registra en PostgreSQL.
+
+  client status --client <slug>
+      Consulta el estado general del cliente: conexión, usuarios activos, flujos y SOPs.
+
+  users sync --client <slug> [--file <ruta_xlsx>] [--api-key <default_key>]
+      Lee empleados.xlsx del cliente, valida las API Keys contra Odoo y las registra
+      cifradas con AES-256-GCM en la base de datos de control.
+
+COMANDOS DE FLUJOS (WORKFLOW DSL):
   schema dump --client <slug> [--output <path>]
       Extrae los modelos y campos (incluidos Studio x_studio_*) de Odoo 19 para contexto de IA.
 
   flow new --client <slug> --name <nombre>
-      Crea una nueva plantilla de flujo declarativo en clients/<slug>/workflows/<nombre>.yaml.
+      Crea una nueva plantilla de flujo declarativo en Clientes/<slug>/workflows/<nombre>.yaml.
 
   flow validate <archivo.yaml>
       Valida la sintaxis YAML, esquema y políticas de gobernanza de un flujo.
@@ -31,11 +57,13 @@ COMANDOS:
       Empaqueta los flujos y metadatos del cliente para distribución.
 
 OPCIONES:
-  --client <slug>     Identificador del cliente en la base de datos
-  --name <nombre>     Nombre identificador del flujo
-  --event <path>      Archivo JSON con payload de evento para pruebas
-  --output <path>     Ruta de salida personalizada
-  --help, -h          Muestra esta ayuda
+  --client, --slug <slug>   Identificador del cliente (minúsculas, sin espacios)
+  --name <nombre>           Nombre visible de la empresa
+  --url <url>               URL HTTPS de Odoo (sin /odoo)
+  --db <bd>                 Nombre de la base de datos en Odoo
+  --bot-uid <id>            ID numérico del usuario bot de Odoo (anti-bucles)
+  --target-dir <path>       Directorio base personalizado (por defecto Clientes/<slug>)
+  --help, -h                Muestra esta ayuda
 `);
 }
 
@@ -59,7 +87,8 @@ function parseArgs(args) {
   return parsed;
 }
 
-export async function runCli(argv = process.argv.slice(2), { baseDir = process.cwd() } = {}) {
+export async function runCli(argv = process.argv.slice(2), options = {}) {
+  const baseDir = options.baseDir || process.cwd();
   const args = parseArgs(argv);
   const command = args._[0];
   const subcommand = args._[1];
@@ -69,9 +98,231 @@ export async function runCli(argv = process.argv.slice(2), { baseDir = process.c
     return 0;
   }
 
-  // 1. Comando schema dump
+  // ==========================================
+  // COMANDO: client init
+  // ==========================================
+  if (command === "client" && subcommand === "init") {
+    const slug = args.slug || args.client;
+    const name = args.name || slug;
+    const url = args.url;
+    const dbName = args.db;
+    const botUid = args["bot-uid"] ? Number(args["bot-uid"]) : 0;
+
+    if (!slug) {
+      console.error("❌ Error: Se requiere el parámetro --slug <slug>");
+      return 1;
+    }
+
+    const clientDir = getClientDirectory(slug, args, options);
+    console.log(`🚀 Inicializando cliente '${slug}' en: ${clientDir}...`);
+
+    // 1. Crear directorios aislados
+    await mkdir(clientDir, { recursive: true });
+    await mkdir(join(clientDir, "workflows"), { recursive: true });
+    await mkdir(join(clientDir, "sops"), { recursive: true });
+
+    // 2. Copiar plantilla empleados.xlsx con ejemplos reales
+    const targetExcel = join(clientDir, "empleados.xlsx");
+    try {
+      await copyFile(TEMPLATE_EXCEL_PATH, targetExcel);
+      console.log(`   ✅ Plantilla 'empleados.xlsx' copiada con registros de ejemplo.`);
+    } catch (err) {
+      console.warn(`   ⚠️ Advertencia copiando plantilla excel: ${err.message}`);
+    }
+
+    // 3. Generar cliente.yaml (metadatos públicos)
+    const clienteYaml = `# Configuración Pública del Cliente Odoo 19
+slug: "${slug}"
+name: "${name}"
+odoo_base_url: "${url || "https://mi-empresa.odoo.com"}"
+odoo_database: "${dbName || slug}"
+timezone: "America/Bogota"
+bot_service_user_id: ${botUid}
+active: true
+`;
+    await writeFile(join(clientDir, "cliente.yaml"), clienteYaml, "utf8");
+    console.log(`   ✅ Archivo 'cliente.yaml' generado.`);
+
+    // 4. Generar .env.example para secretos del cliente
+    const envExample = `# Variables y Secretos del Cliente: ${slug}
+# Complete estos valores de manera segura y renombre este archivo a .env
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_ALERT_CHAT_ID=
+ODOO_SERVICE_API_KEY=
+# Nota: Las API keys individuales de los empleados se gestionan mediante empleados.xlsx
+`;
+    await writeFile(join(clientDir, ".env.example"), envExample, "utf8");
+    console.log(`   ✅ Plantilla '.env.example' generada para variables secretas.`);
+
+    // 5. Registrar en base de datos PostgreSQL si está disponible
+    try {
+      const config = loadConfig();
+      const db = createDb(config.databaseUrl);
+      try {
+        await db.query(
+          `INSERT INTO agent.clients
+             (slug, name, odoo_base_url, odoo_database, timezone, active, settings)
+           VALUES ($1, $2, $3, $4, $5, true, $6)
+           ON CONFLICT (slug) DO UPDATE SET
+             name = EXCLUDED.name,
+             odoo_base_url = EXCLUDED.odoo_base_url,
+             odoo_database = EXCLUDED.odoo_database,
+             timezone = EXCLUDED.timezone,
+             settings = EXCLUDED.settings,
+             active = true`,
+          [
+            slug,
+            name,
+            url || "https://pendiente.odoo.com",
+            dbName || slug,
+            "America/Bogota",
+            JSON.stringify({ read_planner_mode: "active", bot_service_user_id: botUid }),
+          ],
+        );
+        console.log(`   ✅ Cliente registrado exitosamente en la base de datos PostgreSQL.`);
+      } finally {
+        await db.end();
+      }
+    } catch {
+      console.log(`   ℹ️ Registro en BD omitido (PostgreSQL no configurado localmente en este paso).`);
+    }
+
+    console.log(`\n🎉 Cliente '${slug}' listo. Siguientes pasos:`);
+    console.log(`   1. Llena 'empleados.xlsx' en ${clientDir}/ con los usuarios de la empresa.`);
+    console.log(`   2. Ejecuta: odoo-agent-cli users sync --client ${slug}`);
+    console.log(`   3. Configura tus secretos en ${clientDir}/.env (a partir de .env.example)`);
+    return 0;
+  }
+
+  // ==========================================
+  // COMANDO: users sync
+  // ==========================================
+  if (command === "users" && subcommand === "sync") {
+    const slug = args.client || args.slug;
+    if (!slug) {
+      console.error("❌ Error: Se requiere el parámetro --client <slug>");
+      return 1;
+    }
+
+    const clientDir = getClientDirectory(slug, args, options);
+    const excelPath = args.file ? resolve(baseDir, args.file) : join(clientDir, "empleados.xlsx");
+
+    console.log(`📥 Sincronizando empleados para el cliente '${slug}' desde: ${excelPath}...`);
+
+    let config = null;
+    let db = null;
+    try {
+      config = loadConfig();
+      db = createDb(config.databaseUrl);
+    } catch {
+      // Continuar en modo inspección si no hay BD
+    }
+
+    try {
+      let client = { id: slug, slug, odoo_base_url: "", odoo_database: "" };
+      if (db) {
+        const clientRes = await db.query("SELECT * FROM agent.clients WHERE slug = $1 AND active", [slug]);
+        if (clientRes.rows[0]) {
+          client = clientRes.rows[0];
+        }
+      }
+
+      // Si no tenemos URL en BD, intentar leer cliente.yaml
+      try {
+        const yamlRaw = await readFile(join(clientDir, "cliente.yaml"), "utf8");
+        const matchUrl = yamlRaw.match(/odoo_base_url:\s*"([^"]+)"/);
+        const matchDb = yamlRaw.match(/odoo_database:\s*"([^"]+)"/);
+        if (matchUrl) client.odoo_base_url = matchUrl[1];
+        if (matchDb) client.odoo_database = matchDb[1];
+      } catch {}
+
+      const userApiKeys = {};
+      if (args["api-key"]) {
+        userApiKeys["default"] = args["api-key"];
+      }
+
+      const syncRes = await syncUsersFromWorkbook({
+        db,
+        config,
+        client,
+        filePath: excelPath,
+        userApiKeys,
+      });
+
+      console.log(`\n📊 Resumen de Sincronización:`);
+      console.log(`   • Total usuarios en Excel: ${syncRes.total}`);
+      console.log(`   • Usuarios activos: ${syncRes.active}`);
+      console.log(`   • Usuarios en borrador: ${syncRes.drafts}`);
+      console.log(`   • Credenciales Odoo verificadas en tiempo real: ${syncRes.verified}`);
+
+      if (syncRes.users.length > 0) {
+        console.log(`\n👥 Detalle de Usuarios:`);
+        for (const u of syncRes.users) {
+          const statusIcon = u.active ? (u.verified ? "✅" : "⚠️") : "⏸️";
+          console.log(`   ${statusIcon} [${u.rowId}] ${u.login} | Telegram: ${u.telegramId || "(Sin ID)"} | Odoo UID: ${u.odooUid || "(No validado)"}`);
+        }
+      }
+
+      if (syncRes.errors.length > 0) {
+        console.log(`\n⚠️ Advertencias / Errores:`);
+        for (const e of syncRes.errors) {
+          console.log(`   • [${e.rowId}] ${e.error}`);
+        }
+      }
+
+      return 0;
+    } finally {
+      if (db) await db.end();
+    }
+  }
+
+  // ==========================================
+  // COMANDO: client status
+  // ==========================================
+  if (command === "client" && subcommand === "status") {
+    const slug = args.client || args.slug;
+    if (!slug) {
+      console.error("❌ Error: Se requiere --client <slug>");
+      return 1;
+    }
+
+    const clientDir = getClientDirectory(slug, args, options);
+    console.log(`🔍 Consultando estado del cliente '${slug}'...`);
+    console.log(`   • Carpeta local: ${clientDir}`);
+
+    try {
+      const config = loadConfig();
+      const db = createDb(config.databaseUrl);
+      try {
+        const clientRes = await db.query("SELECT * FROM agent.clients WHERE slug = $1", [slug]);
+        const client = clientRes.rows[0];
+        if (!client) {
+          console.log(`   • Estado en BD: No registrado en agent.clients`);
+        } else {
+          console.log(`   • Estado en BD: Activo (Nombre: ${client.name})`);
+          console.log(`   • Odoo URL: ${client.odoo_base_url} (BD: ${client.odoo_database})`);
+
+          const usersRes = await db.query("SELECT count(*)::int AS count FROM agent.linked_users WHERE client_id = $1", [client.id]);
+          console.log(`   • Empleados vinculados en BD: ${usersRes.rows[0].count}`);
+
+          const sopsRes = await db.query("SELECT count(*)::int AS count FROM agent.client_sops WHERE client_id = $1", [client.id]);
+          console.log(`   • Procedimientos SOPs registrados: ${sopsRes.rows[0].count}`);
+        }
+      } finally {
+        await db.end();
+      }
+    } catch {
+      console.log(`   • Estado en BD: Sin conexión a PostgreSQL`);
+    }
+
+    return 0;
+  }
+
+  // ==========================================
+  // COMANDO: schema dump
+  // ==========================================
   if (command === "schema" && subcommand === "dump") {
-    const slug = args.client;
+    const slug = args.client || args.slug;
     if (!slug) {
       console.error("❌ Error: Se requiere el parámetro --client <slug>");
       return 1;
@@ -116,7 +367,7 @@ export async function runCli(argv = process.argv.slice(2), { baseDir = process.c
       );
 
       const studioFields = fields.filter((f) => f.name.startsWith("x_studio_") || f.name.startsWith("x_"));
-      const outputDir = join(baseDir, "clients", slug);
+      const outputDir = getClientDirectory(slug, args, options);
       await mkdir(outputDir, { recursive: true });
       const outputPath = args.output ? resolve(baseDir, args.output) : join(outputDir, "schema.json");
 
@@ -140,16 +391,19 @@ export async function runCli(argv = process.argv.slice(2), { baseDir = process.c
     }
   }
 
-  // 2. Comando flow new
+  // ==========================================
+  // COMANDO: flow new
+  // ==========================================
   if (command === "flow" && subcommand === "new") {
-    const slug = args.client;
+    const slug = args.client || args.slug;
     const name = args.name;
     if (!slug || !name) {
       console.error("❌ Error: Se requieren --client <slug> y --name <nombre>");
       return 1;
     }
 
-    const flowDir = join(baseDir, "clients", slug, "workflows");
+    const clientDir = getClientDirectory(slug, args, options);
+    const flowDir = join(clientDir, "workflows");
     await mkdir(flowDir, { recursive: true });
     const targetPath = join(flowDir, `${name}.yaml`);
 
@@ -187,7 +441,9 @@ notifications:
     return 0;
   }
 
-  // 3. Comando flow validate
+  // ==========================================
+  // COMANDO: flow validate
+  // ==========================================
   if (command === "flow" && subcommand === "validate") {
     const filePath = args._[2];
     if (!filePath) {
@@ -215,7 +471,9 @@ notifications:
     }
   }
 
-  // 4. Comando flow test (Simulación de eventos)
+  // ==========================================
+  // COMANDO: flow test
+  // ==========================================
   if (command === "flow" && subcommand === "test") {
     const filePath = args._[2];
     const eventPath = args.event;
@@ -262,16 +520,19 @@ notifications:
     }
   }
 
-  // 5. Comando flow export
+  // ==========================================
+  // COMANDO: flow export
+  // ==========================================
   if (command === "flow" && subcommand === "export") {
-    const slug = args.client;
+    const slug = args.client || args.slug;
     if (!slug) {
       console.error("❌ Error: Se requiere --client <slug>");
       return 1;
     }
 
-    const flowDir = join(baseDir, "clients", slug, "workflows");
-    const outputPath = args.output ? resolve(baseDir, args.output) : join(baseDir, "clients", slug, `${slug}-flows-bundle.json`);
+    const clientDir = getClientDirectory(slug, args, options);
+    const flowDir = join(clientDir, "workflows");
+    const outputPath = args.output ? resolve(baseDir, args.output) : join(clientDir, `${slug}-flows-bundle.json`);
     try {
       const { readdir } = await import("node:fs/promises");
       const files = await readdir(flowDir);
