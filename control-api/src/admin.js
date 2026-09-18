@@ -12,6 +12,12 @@ export const DEFAULT_TOOLS = [
   ["consultar_facturas_pendientes", 1, false, ["name", "move_type", "state", "partner_id", "invoice_date", "invoice_date_due", "amount_total", "amount_residual", "currency_id", "payment_state", "company_id"]],
   ["consultar_clientes", 1, false, ["name", "vat", "email", "phone", "mobile", "city", "country_id", "company_type", "customer_rank", "active"]],
   ["crear_factura_proveedor_borrador", 2, true, ["move_type", "partner_id", "ref", "invoice_date", "invoice_date_due", "currency_id", "invoice_line_ids"]],
+  ["crear_borrador_orden_venta", 1, false, ["partner_id", "order_line", "user_id", "company_id", "note", "payment_term_id"]],
+  ["crear_borrador_factura_cliente", 1, false, ["partner_id", "invoice_date", "invoice_line_ids", "currency_id", "ref"]],
+  ["asignar_responsable", 1, false, ["user_id"]],
+  ["cambiar_etapa_registro", 2, false, ["stage_id", "state"]],
+  ["confirmar_orden_venta", 3, true, ["id"]],
+  ["validar_albaran_entrega", 3, true, ["id"]],
 ];
 
 function requireString(body, key) {

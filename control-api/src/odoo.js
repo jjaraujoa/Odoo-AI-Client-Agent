@@ -57,6 +57,18 @@ export class OdooJson2Client {
     });
   }
 
+  write(model, id, vals, context = undefined) {
+    const recordId = Number(id);
+    if (!Number.isInteger(recordId) || recordId <= 0) {
+      throw new AppError(400, "invalid_res_id", "El ID del registro para la actualización es inválido.");
+    }
+    return this.call(model, "write", {
+      ids: [recordId],
+      vals,
+      ...(context ? { context } : {}),
+    });
+  }
+
   async postChatterMessage(model, resId, body, { partnerIds = [], messageType = "comment" } = {}) {
     const id = Number(resId);
     if (!Number.isInteger(id) || id <= 0) {
