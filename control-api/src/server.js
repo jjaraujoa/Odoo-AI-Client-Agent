@@ -2,12 +2,13 @@ import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { loadConfig } from "./config.js";
 import { createDb } from "./db.js";
-import { constantTimeKeyMatches } from "./crypto.js";
+import { constantTimeKeyMatches, decryptSecret } from "./crypto.js";
 import { AppError, safeError } from "./errors.js";
 import { json, readJson } from "./http.js";
 import { ModelProviders } from "./providers.js";
 import { TelegramProcessor } from "./telegram.js";
 import { registerStoredTelegramWebhook } from "./onboarding.js";
+import { OdooJson2Client } from "./odoo.js";
 import {
   configureClientModel,
   configureLimits,
@@ -19,6 +20,7 @@ import {
 } from "./admin.js";
 import { processOdooEvent } from "./events.js";
 import { generateOperationalDigest } from "./digest.js";
+import { requestOrExecuteAction, confirmOperationalAction } from "./governance.js";
 
 const config = loadConfig();
 const db = createDb(config.databaseUrl);
@@ -132,6 +134,50 @@ const server = createServer(async (request, response) => {
         200,
         await registerStoredTelegramWebhook(db, config, body.client_slug),
       );
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/admin/actions/execute") {
+      requireAdmin(request);
+      const body = await readJson(request);
+      const clientRes = await db.query("SELECT * FROM agent.clients WHERE slug = $1 AND active", [body.client_slug]);
+      const client = clientRes.rows[0];
+      if (!client) throw new AppError(404, "client_not_found", "Cliente no encontrado.");
+      const userRes = await db.query(
+        `SELECT u.*, c.ciphertext, c.nonce, c.auth_tag, c.key_version
+           FROM agent.linked_users u
+           JOIN agent.odoo_credentials c ON c.linked_user_id = u.id
+          WHERE u.client_id = $1 AND u.active
+          ORDER BY u.created_at ASC LIMIT 1`,
+        [client.id],
+      );
+      if (!userRes.rows[0]) throw new AppError(403, "no_credentials", "No hay credenciales activas.");
+      const apiKey = decryptSecret(userRes.rows[0], config.credentialMasterKey);
+      const odoo = new OdooJson2Client({ baseUrl: client.odoo_base_url, database: client.odoo_database, apiKey });
+      return json(response, 200, await requestOrExecuteAction({
+        db, config, client, actionName: body.action_name, params: body.params || {}, odoo,
+      }));
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/admin/actions/confirm") {
+      requireAdmin(request);
+      const body = await readJson(request);
+      const clientRes = await db.query("SELECT * FROM agent.clients WHERE slug = $1 AND active", [body.client_slug]);
+      const client = clientRes.rows[0];
+      if (!client) throw new AppError(404, "client_not_found", "Cliente no encontrado.");
+      const userRes = await db.query(
+        `SELECT u.*, c.ciphertext, c.nonce, c.auth_tag, c.key_version
+           FROM agent.linked_users u
+           JOIN agent.odoo_credentials c ON c.linked_user_id = u.id
+          WHERE u.client_id = $1 AND u.active
+          ORDER BY u.created_at ASC LIMIT 1`,
+        [client.id],
+      );
+      if (!userRes.rows[0]) throw new AppError(403, "no_credentials", "No hay credenciales activas.");
+      const apiKey = decryptSecret(userRes.rows[0], config.credentialMasterKey);
+      const odoo = new OdooJson2Client({ baseUrl: client.odoo_base_url, database: client.odoo_database, apiKey });
+      return json(response, 200, await confirmOperationalAction({
+        db, odoo, actionId: body.action_id, confirmationCode: body.confirmation_code,
+      }));
     }
 
     throw new AppError(404, "not_found", "Ruta no encontrada.");
