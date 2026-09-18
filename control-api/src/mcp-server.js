@@ -2,6 +2,8 @@ import { createInterface } from "node:readline";
 import { AppError } from "./errors.js";
 import { executeOperationalAction } from "./operational-actions.js";
 import { requestOrExecuteAction, confirmOperationalAction } from "./governance.js";
+import { answerSopQuery } from "./sops.js";
+import { runFullBusinessAudit } from "./audit-business.js";
 
 export const MCP_TOOLS = [
   {
@@ -185,6 +187,28 @@ export const MCP_TOOLS = [
       },
     },
   },
+  {
+    name: "consultar_procedimiento_sop",
+    description: "Consulta los procedimientos operativos estándar (SOPs), políticas y manuales de la empresa (Zero-Tokens / Cero alucinaciones).",
+    inputSchema: {
+      type: "object",
+      required: ["query"],
+      properties: {
+        query: { type: "string", description: "Pregunta o término de búsqueda sobre el procedimiento (ej. 'devolución', 'descuento')" },
+        category: { type: "string", description: "Categoría opcional (ventas, compras, inventario, facturacion, general)" },
+      },
+    },
+  },
+  {
+    name: "ejecutar_auditoria_negocio",
+    description: "Ejecuta un diagnóstico continuo de negocio (higiene de datos, cuellos de botella y SLA en Odoo 19).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        reportType: { type: "string", enum: ["full", "hygiene", "bottlenecks"], default: "full", description: "Tipo de reporte de auditoría" },
+      },
+    },
+  },
 ];
 
 export class McpServer {
@@ -327,6 +351,24 @@ export class McpServer {
     if (name === "consultar_clientes") {
       const domain = args.query ? ["|", ["name", "ilike", args.query], ["vat", "ilike", args.query]] : [["customer_rank", ">", 0]];
       return this.odoo.searchRead("res.partner", domain, ["name", "vat", "email", "phone", "city"], { limit: args.limit || 5 });
+    }
+
+    // SOPs y Auditoría de Negocio
+    if (name === "consultar_procedimiento_sop") {
+      return answerSopQuery({
+        db: this.db,
+        client: this.client,
+        query: args.query,
+        category: args.category,
+      });
+    }
+    if (name === "ejecutar_auditoria_negocio") {
+      return runFullBusinessAudit({
+        db: this.db,
+        odoo: this.odoo,
+        client: this.client,
+        reportType: args.reportType || "operational_health",
+      });
     }
 
     // 3. Acciones operativas bajo motor de gobernanza

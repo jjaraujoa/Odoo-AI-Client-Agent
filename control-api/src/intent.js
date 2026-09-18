@@ -14,6 +14,7 @@ export const INTENT_SCHEMA = {
         "product_price",
         "inventory",
         "pending_invoices",
+        "sop_advisory",
         "help",
         "unsupported",
       ],
@@ -81,6 +82,7 @@ Para facturas publicadas usa invoice_state=posted y payment_filter=all.
 Para borradores usa invoice_state=draft y payment_filter=all.
 Para facturas pendientes de pago usa invoice_state=posted y payment_filter=pending; para pagadas usa payment_filter=paid.
 "Todas" nunca elimina el límite: usa como máximo max_results=10.
+Usa sop_advisory para preguntas sobre cómo realizar procedimientos, reglas internas, políticas de crédito, devoluciones o recepción en bodega.
 Solo marca needs_clarification cuando el contexto completo no permita ejecutar una herramienta de forma inequívoca.
 Nunca inventes IDs, fechas o nombres.
 Devuelve parámetros breves y literales.`;
