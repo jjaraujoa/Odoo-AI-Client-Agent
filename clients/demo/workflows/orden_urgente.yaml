@@ -1,0 +1,27 @@
+# Especificación de Flujo Declarativo (Workflow DSL)
+# Cliente: demo
+name: "orden_urgente"
+description: "Flujo automatizado de negocio para demo"
+trigger:
+  source: "odoo.base_automation"
+  model: "sale.order"
+  event: "on_write"
+  field: "state"
+  condition: "record.state == 'sale' and record.amount_total >= 5000000"
+
+actions:
+  - step: 1
+    action: "odoo.create_draft_invoice"
+    policy: "autonomous"
+  - step: 2
+    action: "odoo.assign_responsible"
+    policy: "autonomous"
+    params:
+      userId: 2
+
+notifications:
+  chatter:
+    target: "sale.order"
+    template: "Flujo 'orden_urgente' ejecutado exitosamente por el Agente de Negocio."
+  telegram:
+    recipient: "supervisor"
