@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { readFile, writeFile, mkdir, copyFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { parse as parseYaml } from "yaml";
 import { parseWorkflowYaml, evaluateCondition } from "../src/workflow-parser.js";
 import { loadConfig } from "../src/config.js";
 import { createDb } from "../src/db.js";
@@ -39,6 +41,9 @@ COMANDOS DE CLIENTE:
   users sync --client <slug> [--file <ruta_xlsx>] [--api-key <default_key>]
       Lee empleados.xlsx del cliente, valida las API Keys contra Odoo y las registra
       cifradas con AES-256-GCM en la base de datos de control.
+
+  mcp [--client <slug>]
+      Inicia el servidor MCP por STDIO conectado a Odoo 19 para Antigravity, Claude Desktop o Codex.
 
 COMANDOS DE FLUJOS (WORKFLOW DSL):
   schema dump --client <slug> [--output <path>]
@@ -319,6 +324,20 @@ ODOO_SERVICE_API_KEY=
   }
 
   // ==========================================
+  // COMANDO: mcp
+  // ==========================================
+  if (command === "mcp") {
+    const { spawn } = await import("node:child_process");
+    const mcpScript = resolve(import.meta.dirname, "odoo-mcp.js");
+    const subProcess = spawn(process.execPath, [mcpScript, ...argv.slice(1)], {
+      stdio: "inherit",
+    });
+    return new Promise((res) => {
+      subProcess.on("exit", (code) => res(code || 0));
+    });
+  }
+
+  // ==========================================
   // COMANDO: schema dump
   // ==========================================
   if (command === "schema" && subcommand === "dump") {
@@ -329,39 +348,73 @@ ODOO_SERVICE_API_KEY=
     }
 
     console.log(`📡 Conectando a Odoo para extraer esquema del cliente '${slug}'...`);
-    const config = loadConfig();
-    const db = createDb(config.databaseUrl);
+    let baseUrl = null;
+    let database = null;
+    let apiKey = null;
+
+    // 1. Intentar cargar desde la carpeta local del cliente
+    const clientDir = getClientDirectory(slug, args, options);
+    const yamlPath = join(clientDir, "cliente.yaml");
+    const envPath = join(clientDir, ".env");
+
+    if (existsSync(yamlPath)) {
+      const clientYaml = parseYaml(await readFile(yamlPath, "utf8"));
+      baseUrl = clientYaml.odoo_base_url;
+      database = clientYaml.odoo_database;
+
+      if (existsSync(envPath)) {
+        const envRaw = await readFile(envPath, "utf8");
+        for (const line of envRaw.split("\n")) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith("ODOO_SERVICE_API_KEY=")) {
+            apiKey = trimmed.slice("ODOO_SERVICE_API_KEY=".length).trim().replace(/^["']|["']$/g, "");
+          }
+        }
+      }
+    }
+
+    // 2. Si no se resolvió localmente, intentar mediante base de datos centralizada
+    if (!apiKey) {
+      const config = loadConfig();
+      const db = createDb(config.databaseUrl);
+      try {
+        const clientRes = await db.query("SELECT * FROM agent.clients WHERE slug = $1 AND active", [slug]);
+        const client = clientRes.rows[0];
+        if (!client) {
+          console.error(`❌ Cliente '${slug}' no encontrado en BD ni con API key en carpeta local.`);
+          return 1;
+        }
+        baseUrl = client.odoo_base_url;
+        database = client.odoo_database;
+
+        const userRes = await db.query(
+          `SELECT u.*, c.ciphertext, c.nonce, c.auth_tag, c.key_version
+             FROM agent.linked_users u
+             JOIN agent.odoo_credentials c ON c.linked_user_id = u.id
+            WHERE u.client_id = $1 AND u.active
+            ORDER BY u.created_at ASC LIMIT 1`,
+          [client.id],
+        );
+        if (!userRes.rows[0]) {
+          console.error(`❌ No hay credenciales activas para el cliente '${slug}'.`);
+          return 1;
+        }
+        apiKey = decryptSecret(userRes.rows[0], config.credentialMasterKey);
+      } finally {
+        await db.end().catch(() => {});
+      }
+    }
+
     try {
-      const clientRes = await db.query("SELECT * FROM agent.clients WHERE slug = $1 AND active", [slug]);
-      const client = clientRes.rows[0];
-      if (!client) {
-        console.error(`❌ Cliente '${slug}' no encontrado o inactivo.`);
-        return 1;
-      }
-
-      const userRes = await db.query(
-        `SELECT u.*, c.ciphertext, c.nonce, c.auth_tag, c.key_version
-           FROM agent.linked_users u
-           JOIN agent.odoo_credentials c ON c.linked_user_id = u.id
-          WHERE u.client_id = $1 AND u.active
-          ORDER BY u.created_at ASC LIMIT 1`,
-        [client.id],
-      );
-      if (!userRes.rows[0]) {
-        console.error(`❌ No hay credenciales activas para el cliente '${slug}'.`);
-        return 1;
-      }
-
-      const apiKey = decryptSecret(userRes.rows[0], config.credentialMasterKey);
       const odoo = new OdooJson2Client({
-        baseUrl: client.odoo_base_url,
-        database: client.odoo_database,
+        baseUrl,
+        database,
         apiKey,
       });
 
       const fields = await odoo.searchRead(
         "ir.model.fields",
-        [["model", "in", ["sale.order", "purchase.order", "account.move", "stock.picking", "res.partner", "product.product"]]],
+        [["model", "in", ["sale.order", "purchase.order", "account.move", "stock.picking", "res.partner", "product.product", "crm.lead"]]],
         ["model", "name", "field_description", "ttype", "required", "readonly"],
         { limit: 500 },
       );

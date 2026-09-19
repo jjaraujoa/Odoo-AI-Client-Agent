@@ -76,6 +76,18 @@ export const MCP_TOOLS = [
     },
   },
   {
+    name: "consultar_oportunidades_crm",
+    description: "Consulta iniciativas y oportunidades del CRM en Odoo 19 por cliente, etapa o ingreso esperado.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        domain: { type: "array", description: "Filtros de dominio de Odoo, ej. [['stage_id', '=', 1]]" },
+        fields: { type: "array", items: { type: "string" }, description: "Campos a recuperar" },
+        limit: { type: "integer", default: 10 },
+      },
+    },
+  },
+  {
     name: "crear_borrador_orden_venta",
     description: "Crea una nueva cotización / orden de venta en estado borrador (Nivel 1 - Autónomo).",
     inputSchema: {
@@ -352,9 +364,15 @@ export class McpServer {
       const domain = args.query ? ["|", ["name", "ilike", args.query], ["vat", "ilike", args.query]] : [["customer_rank", ">", 0]];
       return this.odoo.searchRead("res.partner", domain, ["name", "vat", "email", "phone", "city"], { limit: args.limit || 5 });
     }
+    if (name === "consultar_oportunidades_crm") {
+      return this.odoo.searchRead("crm.lead", args.domain || [], args.fields || ["name", "partner_id", "stage_id", "expected_revenue", "probability", "user_id"], { limit: args.limit || 10 });
+    }
 
     // SOPs y Auditoría de Negocio
     if (name === "consultar_procedimiento_sop") {
+      if (!this.db) {
+        return "Base de datos de SOPs no conectada en modo directo. Consulta los archivos en sops/ del cliente.";
+      }
       return answerSopQuery({
         db: this.db,
         client: this.client,
@@ -363,6 +381,9 @@ export class McpServer {
       });
     }
     if (name === "ejecutar_auditoria_negocio") {
+      if (!this.db) {
+        return "La auditoría histórica requiere conexión a la base de datos de control (PostgreSQL).";
+      }
       return runFullBusinessAudit({
         db: this.db,
         odoo: this.odoo,
