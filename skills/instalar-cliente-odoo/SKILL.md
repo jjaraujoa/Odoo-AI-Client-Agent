@@ -56,29 +56,33 @@ Ejecuta el comando del CLI desde el directorio `control-api/`:
 Esto generará automáticamente en `/Users/jorgearaujo/Proyectos/XETA/Clientes/<slug>/`:
 - `cliente.yaml`: Metadatos públicos de conexión.
 - `.env.example`: Plantilla de variables secretas.
-- `empleados.xlsx`: Copia directa de `Cliente-PRG-Piloto.xlsx` con registros de ejemplo para que el consultor sepa cómo llenarla.
+- `usuarios.xlsx`: Copia de `Plantilla-Users.xlsx` con registros de ejemplo para guiar al usuario.
 - `workflows/`: Directorio aislado para recetas declarativas en YAML.
 - `sops/`: Directorio aislado para procedimientos operativos estándar en Markdown.
 - Registro del cliente en la base de datos PostgreSQL (`agent.clients`).
 
-### Paso 3: Configuración de Secretos y Empleados
+### Paso 3: Configuración de Secretos y Usuarios
 Indica al usuario de forma clara:
 1. **Secretos**: Copiar `.env.example` a `.env` en la carpeta del cliente y añadir:
    - `TELEGRAM_BOT_TOKEN`: Token del bot de Telegram del cliente.
    - `ODOO_SERVICE_API_KEY`: Clave API del usuario bot del orquestador.
-2. **Empleados**: Abrir `empleados.xlsx` en la carpeta del cliente y agregar los usuarios que tendrán acceso al agente por Telegram o MCP, siguiendo el ejemplo de la primera fila.
+2. **Usuarios**: Abrir `usuarios.xlsx` en la carpeta del cliente y agregar los usuarios que tendrán acceso al agente por Telegram o MCP, siguiendo el ejemplo de la primera fila.
 
-### Paso 4: Sincronización de Usuarios Cifrados
-Una vez que el usuario haya completado la hoja de empleados, ejecuta:
-
+### Paso 4: Validación y Sincronización de Usuarios
+1. Auditar la arquitectura y tipos de datos de la plantilla antes de tocar la red:
 ```bash
-./bin/odoo-agent-cli.js users sync --client <slug>
+./bin/odoo-agent-cli.js users validate --client <slug>
+```
+2. Una vez validada la plantilla, sincronizar y cifrar:
+```bash
+./bin/odoo-agent-cli.js users sync --client <slug> [--interactive]
 ```
 
 El importador:
-- Lee la hoja `Usuarios` de `empleados.xlsx`.
-- Si se incluyen API keys individuales, las valida en tiempo real contra Odoo (`res.users/context_get`).
+- Lee la hoja `Usuarios` de `usuarios.xlsx`.
+- Si se suministran API keys, las valida en tiempo real contra Odoo (`res.users/context_get`).
 - Cifra las claves con **AES-256-GCM** usando la clave maestra y las registra en PostgreSQL.
+- Extrae metadatos de las hojas `Telegram` y `Configuración`.
 - Imprime un reporte seguro en consola sin exponer secretos.
 
 ### Paso 5: Verificación de Salud
