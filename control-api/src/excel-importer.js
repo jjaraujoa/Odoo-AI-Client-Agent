@@ -329,61 +329,91 @@ export async function syncUsersFromWorkbook({
     // Persistir en base de datos si está conectada
     if (db) {
       try {
-        const linkedRes = await db.query(
-          `INSERT INTO agent.linked_users
-             (client_id, onboarding_row_id, odoo_login, odoo_user_id,
-              telegram_user_id, telegram_chat_id, telegram_username, active)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-           ON CONFLICT (client_id, telegram_user_id) DO UPDATE SET
-             odoo_login = EXCLUDED.odoo_login,
-             odoo_user_id = COALESCE(EXCLUDED.odoo_user_id, agent.linked_users.odoo_user_id),
-             telegram_username = EXCLUDED.telegram_username,
-             active = EXCLUDED.active,
-             updated_at = now()
-           RETURNING id`,
-          [
-            client.id,
-            user.rowId,
-            user.odooLogin,
-            odooUid,
-            telegramId,
-            telegramId,
-            user.telegramUsername || null,
-            user.active,
-          ],
-        );
-
-        const linkedUserId = linkedRes.rows[0]?.id;
-
-        if (linkedUserId && apiKey && masterKey) {
-          const enc = encryptSecret(apiKey, masterKey);
-          await db.query(
-            `INSERT INTO agent.odoo_credentials
-               (linked_user_id, algorithm, ciphertext, nonce, auth_tag, key_version, api_key_fingerprint, api_key_last_four)
+        if (telegramId) {
+          const linkedRes = await db.query(
+            `INSERT INTO agent.linked_users
+               (client_id, onboarding_row_id, odoo_login, odoo_user_id,
+                telegram_user_id, telegram_chat_id, telegram_username, active)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-             ON CONFLICT (linked_user_id) DO UPDATE SET
-               ciphertext = EXCLUDED.ciphertext,
-               nonce = EXCLUDED.nonce,
-               auth_tag = EXCLUDED.auth_tag,
-               api_key_fingerprint = EXCLUDED.api_key_fingerprint,
-               api_key_last_four = EXCLUDED.api_key_last_four,
-               updated_at = now()`,
+             ON CONFLICT (client_id, telegram_user_id) DO UPDATE SET
+               odoo_login = EXCLUDED.odoo_login,
+               odoo_user_id = COALESCE(EXCLUDED.odoo_user_id, agent.linked_users.odoo_user_id),
+               telegram_username = EXCLUDED.telegram_username,
+               active = EXCLUDED.active,
+               updated_at = now()
+             RETURNING id`,
             [
-              linkedUserId,
-              enc.algorithm,
-              enc.ciphertext,
-              enc.nonce,
-              enc.authTag,
-              enc.keyVersion,
-              enc.fingerprint,
-              enc.lastFour,
+              client.id,
+              user.rowId,
+              user.odooLogin,
+              odooUid,
+              telegramId,
+              telegramId,
+              user.telegramUsername || null,
+              user.active,
             ],
           );
+
+          const linkedUserId = linkedRes.rows[0]?.id;
+
+          if (linkedUserId && apiKey && masterKey) {
+            const enc = encryptSecret(apiKey, masterKey);
+            await db.query(
+              `INSERT INTO agent.odoo_credentials
+                 (linked_user_id, algorithm, ciphertext, nonce, auth_tag, key_version, api_key_fingerprint, api_key_last_four)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+               ON CONFLICT (linked_user_id) DO UPDATE SET
+                 ciphertext = EXCLUDED.ciphertext,
+                 nonce = EXCLUDED.nonce,
+                 auth_tag = EXCLUDED.auth_tag,
+                 api_key_fingerprint = EXCLUDED.api_key_fingerprint,
+                 api_key_last_four = EXCLUDED.api_key_last_four,
+                 updated_at = now()`,
+              [
+                linkedUserId,
+                enc.algorithm,
+                enc.ciphertext,
+                enc.nonce,
+                enc.authTag,
+                enc.keyVersion,
+                enc.fingerprint,
+                enc.lastFour,
+              ],
+            );
+          }
+        } else {
+          // Usuario borrador sin telegramId asignado aún: persistir en onboarding_user_drafts
+          await db.query(
+            `INSERT INTO agent.onboarding_user_drafts
+               (client_slug, row_id, package_id, consultant, requested_active,
+                odoo_login, odoo_user_id, telegram_user_id, telegram_chat_id, telegram_username,
+                credential_status, validation_message, last_reviewed_at)
+             VALUES ($1, $2, gen_random_uuid(), 'consultant-cli', $3, $4, $5, NULL, NULL, $6, $7, $8, now())
+             ON CONFLICT (client_slug, row_id) DO UPDATE SET
+               requested_active = EXCLUDED.requested_active,
+               odoo_login = EXCLUDED.odoo_login,
+               odoo_user_id = EXCLUDED.odoo_user_id,
+               telegram_username = EXCLUDED.telegram_username,
+               credential_status = EXCLUDED.credential_status,
+               validation_message = EXCLUDED.validation_message,
+               last_reviewed_at = now(),
+               updated_at = now()`,
+            [
+              client.slug || "default",
+              user.rowId,
+              user.active,
+              user.odooLogin,
+              odooUid,
+              user.telegramUsername || null,
+              verified ? "valid" : (apiKey ? "invalid" : "missing"),
+              verified ? "Credencial verificada en Odoo" : "Borrador sin ID de Telegram asignado",
+            ],
+          ).catch(() => {});
         }
-      } catch (dbErr) {
+      } catch (err) {
         results.errors.push({
           rowId: user.rowId,
-          error: `Error guardando en BD: ${dbErr.message}`,
+          error: `Error al persistir usuario en base de datos: ${err.message}`,
         });
       }
     }

@@ -1,6 +1,4 @@
 import { createInterface } from "node:readline";
-import { AppError } from "./errors.js";
-import { executeOperationalAction } from "./operational-actions.js";
 import { requestOrExecuteAction, confirmOperationalAction } from "./governance.js";
 import { answerSopQuery } from "./sops.js";
 import { runFullBusinessAudit } from "./audit-business.js";

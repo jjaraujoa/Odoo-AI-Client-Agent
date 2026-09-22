@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { inTransaction } from "./db.js";
 import {
+  constantTimeKeyMatches,
   decryptNamedSecret,
   decryptSecret,
   encryptNamedSecret,
@@ -344,7 +345,7 @@ export async function validateOnboardingPayload(db, config, rawPayload) {
     );
     if (collision.rows[0]) {
       errors.push(
-        `Telegram User ID ${user.telegramUserId} ya está activo en ${collision.rows[0].slug}.`,
+        `Telegram User ID ${user.telegramUserId} ya está registrado y activo en otra empresa.`,
       );
     }
   }
@@ -898,7 +899,7 @@ export async function resolveTelegramChannel(db, config, webhookSecret) {
     auth_tag: channel.webhook_secret_auth_tag,
     key_version: channel.webhook_secret_key_version,
   }, config.credentialMasterKey, "telegram-webhook-secret");
-  if (storedSecret !== webhookSecret) {
+  if (!constantTimeKeyMatches(storedSecret, webhookSecret)) {
     throw new AppError(401, "invalid_telegram_webhook", "Webhook de Telegram no autorizado.");
   }
   channel.botToken = decryptNamedSecret({

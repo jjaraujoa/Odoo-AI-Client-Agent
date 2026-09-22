@@ -33,7 +33,7 @@ test("readClientWorkbook extrae datos de cliente, telegram, configuración y usu
   assert.equal(firstUser.rowId, "TEST-001");
   assert.equal(firstUser.active, true);
   assert.equal(firstUser.odooLogin, "example@example.com");
-  assert.equal(firstUser.telegramUserId, "665768493");
+  assert.equal(firstUser.telegramUserId, "123456789");
   assert.equal(firstUser.requestApiKey, true);
 });
 

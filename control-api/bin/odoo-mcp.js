@@ -10,7 +10,9 @@ import { OdooJson2Client } from "../src/odoo.js";
 import { McpServer } from "../src/mcp-server.js";
 import { decryptSecret } from "../src/crypto.js";
 
-const DEFAULT_CLIENTS_ROOT = "/Users/jorgearaujo/Proyectos/XETA/Clientes";
+const DEFAULT_CLIENTS_ROOT = process.env.ODOO_CLIENTS_ROOT
+  ? resolve(process.env.ODOO_CLIENTS_ROOT)
+  : resolve(process.cwd(), "clients");
 
 function parseArg(name, fallback = null) {
   const index = process.argv.indexOf(name);

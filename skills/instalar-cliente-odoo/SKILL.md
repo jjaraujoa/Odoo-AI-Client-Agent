@@ -1,11 +1,11 @@
 ---
 name: instalar-cliente-odoo
-description: Protocolo automatizado e interactivo para instalar, configurar y desplegar nuevos clientes de Odoo 19 en /Users/jorgearaujo/Proyectos/XETA/Clientes/<slug>/, con plantilla de empleados Excel y gestión segura de secretos.
+description: Protocolo automatizado e interactivo para instalar, configurar y desplegar nuevos clientes de Odoo 19 en clients/<slug>/, con plantilla de empleados Excel y gestión segura de secretos.
 ---
 
 # Skill: Instalación Segura y Aislada de Clientes Odoo 19
 
-Esta skill guía y automatiza el proceso completo de alta, configuración y puesta en marcha de un nuevo cliente empresarial en el ecosistema **Odoo-AI-Client-Agent**, asegurando el aislamiento estricto de datos, recetas de flujos y secretos en `/Users/jorgearaujo/Proyectos/XETA/Clientes/<slug>/`.
+Esta skill guía y automatiza el proceso completo de alta, configuración y puesta en marcha de un nuevo cliente empresarial en el ecosistema **Odoo-AI-Client-Agent**, asegurando el aislamiento estricto de datos, recetas de flujos y secretos en `clients/<slug>/`.
 
 ---
 
@@ -53,7 +53,7 @@ Ejecuta el comando del CLI desde el directorio `control-api/`:
   --bot-uid <bot_uid>
 ```
 
-Esto generará automáticamente en `/Users/jorgearaujo/Proyectos/XETA/Clientes/<slug>/`:
+Esto generará automáticamente en `clients/<slug>/`:
 - `cliente.yaml`: Metadatos públicos de conexión.
 - `.env.example`: Plantilla de variables secretas.
 - `usuarios.xlsx`: Copia de `Plantilla-Users.xlsx` con registros de ejemplo para guiar al usuario.

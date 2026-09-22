@@ -66,6 +66,12 @@ services:
       FRESHCLAM_CHECKS: "1"
     volumes:
       - clamav_data:/var/lib/clamav
+    healthcheck:
+      test: ["CMD-SHELL", "clamdscan /dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
     networks:
       - private
       - public

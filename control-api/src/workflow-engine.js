@@ -2,8 +2,6 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseWorkflowYaml, evaluateCondition } from "./workflow-parser.js";
 import { requestOrExecuteAction } from "./governance.js";
-import { deliverTelegramMessage } from "./telegram.js";
-import { AppError } from "./errors.js";
 
 /**
  * Carga flujos de trabajo desde el sistema de archivos local (clients/<slug>/workflows/)

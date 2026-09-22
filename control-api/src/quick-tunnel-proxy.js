@@ -110,7 +110,7 @@ async function main() {
     targetPort: Number(process.env.N8N_PORT ?? 5678),
   });
   const address = await proxy.listen();
-  console.log(`Proxy temporal limitado a ${TELEGRAM_WEBHOOK_PATH} en 127.0.0.1:${address.port}.`);
+  process.stdout.write(`Proxy temporal limitado a ${TELEGRAM_WEBHOOK_PATH} en 127.0.0.1:${address.port}.\n`);
 
   const stop = async () => {
     await proxy.close();

@@ -166,7 +166,10 @@ export async function processOdooEvent({ db, config, body }) {
   if (["critical", "high"].includes(priority)) {
     // Resolver credenciales de Telegram si existen
     const channelRes = await db.query(
-      `SELECT token_ciphertext, token_nonce, token_auth_tag, token_key_version
+      `SELECT token_ciphertext AS ciphertext,
+              token_nonce AS nonce,
+              token_auth_tag AS auth_tag,
+              token_key_version AS key_version
          FROM agent.channel_credentials
         WHERE client_id = $1 AND active AND channel = 'telegram'`,
       [client.id],

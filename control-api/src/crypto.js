@@ -50,6 +50,8 @@ export function constantTimeKeyMatches(provided, expected) {
 }
 
 export function redactSecret(value) {
-  if (!value) return "";
-  return `${String(value).slice(0, 2)}…${String(value).slice(-4)}`;
+  const str = String(value || "");
+  if (!str) return "";
+  if (str.length < 8) return "••••";
+  return `${str.slice(0, 2)}…${str.slice(-4)}`;
 }
