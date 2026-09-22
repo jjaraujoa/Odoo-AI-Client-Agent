@@ -43,6 +43,7 @@ export async function createDraftSaleOrder(odoo, {
       product_uom_qty: Number(line.quantity || line.product_uom_qty || 1),
       price_unit: Number(line.priceUnit || line.price_unit || 0),
       name: String(line.name || line.description || "Línea de producto"),
+      ...(line.discount !== undefined ? { discount: Number(line.discount) } : {}),
     }]),
   };
 

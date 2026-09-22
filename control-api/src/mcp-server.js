@@ -104,6 +104,7 @@ export const MCP_TOOLS = [
               productId: { type: "integer" },
               quantity: { type: "number" },
               priceUnit: { type: "number" },
+              discount: { type: "number", description: "Porcentaje de descuento (ej. 10 para 10%)" },
               name: { type: "string" },
             },
           },
