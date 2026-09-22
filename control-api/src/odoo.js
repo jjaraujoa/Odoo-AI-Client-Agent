@@ -56,6 +56,38 @@ export class OdooJson2Client {
       ...(context ? { context } : {}),
     });
   }
+
+  write(model, id, vals, context = undefined) {
+    const recordId = Number(id);
+    if (!Number.isInteger(recordId) || recordId <= 0) {
+      throw new AppError(400, "invalid_res_id", "El ID del registro para la actualización es inválido.");
+    }
+    return this.call(model, "write", {
+      ids: [recordId],
+      vals,
+      ...(context ? { context } : {}),
+    });
+  }
+
+  async postChatterMessage(model, resId, body, { partnerIds = [], messageType = "comment" } = {}) {
+    const id = Number(resId);
+    if (!Number.isInteger(id) || id <= 0) {
+      throw new AppError(400, "invalid_res_id", "El ID del registro para el mensaje de chatter es inválido.");
+    }
+    const values = {
+      model,
+      res_id: id,
+      body: String(body),
+      message_type: messageType,
+    };
+    if (Array.isArray(partnerIds) && partnerIds.length > 0) {
+      const validPartners = partnerIds.map(Number).filter((p) => Number.isInteger(p) && p > 0);
+      if (validPartners.length > 0) {
+        values.partner_ids = [[6, 0, validPartners]];
+      }
+    }
+    return this.create("mail.message", values);
+  }
 }
 
 export function relationId(value) {

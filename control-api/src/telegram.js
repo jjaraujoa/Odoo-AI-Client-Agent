@@ -17,6 +17,7 @@ import { OdooJson2Client } from "./odoo.js";
 import { audit, textSummary } from "./audit.js";
 import { handleSemanticRead, planSemanticReadShadow } from "./read-agent.js";
 import { readPlannerMode } from "./semantic-catalog.js";
+import { answerSopQuery } from "./sops.js";
 
 function extractUpdate(update) {
   const callback = update.callback_query;
@@ -149,6 +150,7 @@ function helpText() {
     "/clear — limpiar memoria y volver a automático",
     "/confirmar <código> — crear el borrador pendiente",
     "/cancelar — descartar el borrador pendiente",
+    "/sop <consulta> — consultar procedimientos operativos y políticas (SOPs)",
   ].join("\n");
 }
 
@@ -324,6 +326,21 @@ export class TelegramProcessor {
           eventType: "pending_action_cancel",
         };
       }
+      case "/sop": {
+        if (!command.argument) {
+          throw new AppError(400, "invalid_sop_query", "Usa /sop seguido del término o procedimiento a consultar.");
+        }
+        const sopResult = await answerSopQuery({
+          db: this.db,
+          clientId: identity.client_id,
+          query: command.argument,
+        });
+        return {
+          text: sopResult.text,
+          eventType: "sop_advisory",
+          toolName: "consultar_procedimiento_sop",
+        };
+      }
       default:
         throw new AppError(400, "unknown_command", "Comando desconocido. Usa /help.");
     }
@@ -457,6 +474,26 @@ export class TelegramProcessor {
     }
     if (classified.data.intent === "help") {
       return { text: helpText(), eventType: "help", model: classified.model, usage: classified.usage };
+    }
+    if (classified.data.intent === "sop_advisory") {
+      const sopResult = await answerSopQuery({
+        db: this.db,
+        clientId: identity.client_id,
+        query: classified.data.query || parsed.text,
+      });
+      await addMemory(this.db, identity, session, "assistant", "message", { text: sopResult.text });
+      return {
+        text: sopResult.text,
+        eventType: "sop_advisory",
+        toolName: "consultar_procedimiento_sop",
+        model: classified.model,
+        usage: classified.usage,
+        requestAudit: {
+          sop_matched: sopResult.matched,
+          sop_code: sopResult.sop?.code || null,
+          sop_title: sopResult.sop?.title || null,
+        },
+      };
     }
     if (classified.data.intent === "unsupported") {
       throw new AppError(400, "unsupported_request", "Esa solicitud no está disponible en este piloto.");

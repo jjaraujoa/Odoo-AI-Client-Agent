@@ -1,0 +1,87 @@
+{
+  "id": "e5c7a102-39bd-49e1-b924-18c89ad54932",
+  "name": "Odoo AI Agent - Receptor de Eventos Odoo",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "odoo-events",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "d76c3312-5f6a-4933-9118-2e0f0c05a181",
+      "name": "Webhook Odoo Events",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -480,
+        0
+      ],
+      "webhookId": "9b16892e-360f-48d6-95f7-463870e2815e"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://control-api:8080/v1/events/odoo",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "b3e51874-9dc4-4d89-98a2-111099e2881a",
+      "name": "Procesar en control-api",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -200,
+        0
+      ],
+      "retryOnFail": false
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true, status: $json.status || 'received' }) }}",
+        "options": {}
+      },
+      "id": "f8529aa1-1188-4693-a441-2a1c0d029519",
+      "name": "Responder a Odoo",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        80,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Odoo Events": {
+      "main": [
+        [
+          {
+            "node": "Procesar en control-api",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Procesar en control-api": {
+      "main": [
+        [
+          {
+            "node": "Responder a Odoo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
