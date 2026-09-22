@@ -8,10 +8,10 @@ import { loadConfig } from "../src/config.js";
 import { createDb } from "../src/db.js";
 import { decryptSecret } from "../src/crypto.js";
 import { OdooJson2Client } from "../src/odoo.js";
-import { readClientWorkbook, syncUsersFromWorkbook } from "../src/excel-importer.js";
+import { readClientWorkbook, syncUsersFromWorkbook, validateClientWorkbook } from "../src/excel-importer.js";
 
 const DEFAULT_CLIENTS_ROOT = "/Users/jorgearaujo/Proyectos/XETA/Clientes";
-const TEMPLATE_EXCEL_PATH = resolve(import.meta.dirname, "../../onboarding/consultant-kit/Cliente-PRG-Piloto.xlsx");
+const TEMPLATE_EXCEL_PATH = resolve(import.meta.dirname, "../../onboarding/consultant-kit/Plantilla-Users.xlsx");
 
 function getClientDirectory(slug, args = {}, options = {}) {
   if (args["target-dir"]) {
@@ -21,6 +21,16 @@ function getClientDirectory(slug, args = {}, options = {}) {
     return join(options.baseDir, "clients", slug);
   }
   return join(DEFAULT_CLIENTS_ROOT, slug);
+}
+
+function findClientExcelPath(clientDir, explicitFile = null, baseDir = process.cwd()) {
+  if (explicitFile) return resolve(baseDir, explicitFile);
+  const candidates = ["usuarios.xlsx", "Plantilla-Users.xlsx", "empleados.xlsx"];
+  for (const candidate of candidates) {
+    const fullPath = join(clientDir, candidate);
+    if (existsSync(fullPath)) return fullPath;
+  }
+  return join(clientDir, "usuarios.xlsx");
 }
 
 function printHelp() {
@@ -33,13 +43,17 @@ USO:
 COMANDOS DE CLIENTE:
   client init --slug <slug> --name <nombre> --url <url> --db <bd> [--bot-uid <id>]
       Inicializa la carpeta aislada del cliente en Clientes/<slug>/, copia la plantilla
-      empleados.xlsx (con ejemplos), genera cliente.yaml, .env.example y registra en PostgreSQL.
+      usuarios.xlsx (con ejemplos), genera cliente.yaml, .env.example y registra en PostgreSQL.
 
   client status --client <slug>
       Consulta el estado general del cliente: conexión, usuarios activos, flujos y SOPs.
 
-  users sync --client <slug> [--file <ruta_xlsx>] [--api-key <default_key>]
-      Lee empleados.xlsx del cliente, valida las API Keys contra Odoo y las registra
+  users validate [--client <slug>] [--file <ruta_xlsx>]
+      Verifica y audita la arquitectura de la plantilla Excel (encabezados, unicidad de IDs,
+      tipos de datos de Telegram y Odoo) antes de sincronizar.
+
+  users sync --client <slug> [--file <ruta_xlsx>] [--api-key <default_key>] [--interactive]
+      Lee usuarios.xlsx (o Plantilla-Users.xlsx), valida las API Keys contra Odoo y las registra
       cifradas con AES-256-GCM en la base de datos de control.
 
   mcp [--client <slug>]
@@ -126,11 +140,11 @@ export async function runCli(argv = process.argv.slice(2), options = {}) {
     await mkdir(join(clientDir, "workflows"), { recursive: true });
     await mkdir(join(clientDir, "sops"), { recursive: true });
 
-    // 2. Copiar plantilla empleados.xlsx con ejemplos reales
-    const targetExcel = join(clientDir, "empleados.xlsx");
+    // 2. Copiar plantilla usuarios.xlsx con ejemplos reales
+    const targetExcel = join(clientDir, "usuarios.xlsx");
     try {
       await copyFile(TEMPLATE_EXCEL_PATH, targetExcel);
-      console.log(`   ✅ Plantilla 'empleados.xlsx' copiada con registros de ejemplo.`);
+      console.log(`   ✅ Plantilla 'usuarios.xlsx' copiada con registros de ejemplo.`);
     } catch (err) {
       console.warn(`   ⚠️ Advertencia copiando plantilla excel: ${err.message}`);
     }
@@ -193,9 +207,56 @@ ODOO_SERVICE_API_KEY=
     }
 
     console.log(`\n🎉 Cliente '${slug}' listo. Siguientes pasos:`);
-    console.log(`   1. Llena 'empleados.xlsx' en ${clientDir}/ con los usuarios de la empresa.`);
-    console.log(`   2. Ejecuta: odoo-agent-cli users sync --client ${slug}`);
-    console.log(`   3. Configura tus secretos en ${clientDir}/.env (a partir de .env.example)`);
+    console.log(`   1. Llena 'usuarios.xlsx' en ${clientDir}/ con los usuarios de la empresa.`);
+    console.log(`   2. Valida la plantilla: odoo-agent-cli users validate --client ${slug}`);
+    console.log(`   3. Sincroniza: odoo-agent-cli users sync --client ${slug}`);
+    console.log(`   4. Configura tus secretos en ${clientDir}/.env (a partir de .env.example)`);
+    return 0;
+  }
+
+  // ==========================================
+  // COMANDO: users validate
+  // ==========================================
+  if (command === "users" && subcommand === "validate") {
+    const slug = args.client || args.slug;
+    const clientDir = slug ? getClientDirectory(slug, args, options) : process.cwd();
+    const excelPath = findClientExcelPath(clientDir, args.file, baseDir);
+
+    console.log(`🔍 Validando arquitectura de la plantilla Excel desde:\n   ${excelPath}\n`);
+
+    if (!existsSync(excelPath)) {
+      console.error(`❌ Error: No se encontró el archivo Excel en: ${excelPath}`);
+      return 1;
+    }
+
+    const audit = validateClientWorkbook(excelPath);
+
+    console.log(`📋 Resumen de la Plantilla:`);
+    console.log(`   • Cliente: ${audit.summary.clientName || "(No definido)"} (${audit.summary.clientSlug || "sin slug"})`);
+    console.log(`   • URL Odoo: ${audit.summary.odooBaseUrl || "(No definida)"}`);
+    console.log(`   • Base de Datos: ${audit.summary.odooDatabase || "(No definida)"}`);
+    console.log(`   • Bot Telegram: @${audit.summary.botUsername || "(No configurado)"}`);
+    console.log(`   • Parámetros Configuración: ${audit.summary.configParamsCount}`);
+    console.log(`   • Total Usuarios: ${audit.summary.totalUsers} (Activos: ${audit.summary.activeUsers}, Borradores: ${audit.summary.draftUsers})`);
+    console.log(`   • Usuarios que solicitan API Key: ${audit.summary.requestApiKeyUsers}`);
+
+    if (audit.warnings.length > 0) {
+      console.log(`\n⚠️  Advertencias (${audit.warnings.length}):`);
+      for (const w of audit.warnings) {
+        console.log(`   • ${w}`);
+      }
+    }
+
+    if (audit.errors.length > 0) {
+      console.log(`\n❌ Errores Críticos (${audit.errors.length}):`);
+      for (const e of audit.errors) {
+        console.log(`   • ${e}`);
+      }
+      console.log(`\n❌ La plantilla contiene errores estructurales que deben corregirse antes de sincronizar.`);
+      return 1;
+    }
+
+    console.log(`\n✅ ¡Plantilla válida! La arquitectura y tipos de datos cumplen los estándares.`);
     return 0;
   }
 
@@ -210,9 +271,25 @@ ODOO_SERVICE_API_KEY=
     }
 
     const clientDir = getClientDirectory(slug, args, options);
-    const excelPath = args.file ? resolve(baseDir, args.file) : join(clientDir, "empleados.xlsx");
+    const excelPath = findClientExcelPath(clientDir, args.file, baseDir);
 
-    console.log(`📥 Sincronizando empleados para el cliente '${slug}' desde: ${excelPath}...`);
+    console.log(`📥 Sincronizando usuarios para el cliente '${slug}' desde:\n   ${excelPath}...`);
+
+    if (!existsSync(excelPath)) {
+      console.error(`❌ Error: No se encontró el archivo Excel en: ${excelPath}`);
+      return 1;
+    }
+
+    // Validación previa obligatoria de la arquitectura del Excel
+    const audit = validateClientWorkbook(excelPath);
+    if (!audit.valid) {
+      console.error(`\n❌ La plantilla Excel contiene errores estructurales:`);
+      for (const err of audit.errors) {
+        console.error(`   • ${err}`);
+      }
+      console.error(`\nCorrige los errores antes de sincronizar o ejecuta 'users validate'.`);
+      return 1;
+    }
 
     let config = null;
     let db = null;
@@ -244,6 +321,25 @@ ODOO_SERVICE_API_KEY=
       const userApiKeys = {};
       if (args["api-key"]) {
         userApiKeys["default"] = args["api-key"];
+      }
+
+      // Si se ejecuta con flag --interactive y estamos en terminal interactiva TTY
+      if (args.interactive && process.stdin.isTTY) {
+        const { createInterface } = await import("node:readline/promises");
+        const rl = createInterface({ input: process.stdin, output: process.stdout });
+        try {
+          const parsedPreview = readClientWorkbook(excelPath);
+          for (const u of parsedPreview.users) {
+            if (u.active && u.requestApiKey && !userApiKeys[u.rowId] && !u.odooApiKey) {
+              const enteredKey = await rl.question(`🔑 Ingresa la API Key de Odoo para ${u.odooLogin} [${u.rowId}] (Enter para omitir): `);
+              if (enteredKey.trim()) {
+                userApiKeys[u.rowId] = enteredKey.trim();
+              }
+            }
+          }
+        } finally {
+          rl.close();
+        }
       }
 
       const syncRes = await syncUsersFromWorkbook({
