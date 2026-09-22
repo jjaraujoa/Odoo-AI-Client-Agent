@@ -1,120 +1,221 @@
-﻿# Agente Odoo para Cliente Final (Piloto Telegram)
+# Odoo AI Client Agent 🚀
 
-Plataforma conversacional que permite a los empleados y usuarios finales de una empresa interactuar con Odoo 19 mediante Telegram de forma segura, acotada y trazable.
+[![CI](https://github.com/jjaraujoa/Odoo-AI-Client-Agent/actions/workflows/ci.yml/badge.svg)](https://github.com/jjaraujoa/Odoo-AI-Client-Agent/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg)](https://nodejs.org/)
+[![Odoo 19](https://img.shields.io/badge/Odoo-19.0%20(Enterprise%20%7C%20Community)-purple.svg)](https://www.odoo.com/)
+[![MCP Protocol](https://img.shields.io/badge/MCP-Compatible-orange.svg)](https://modelcontextprotocol.io/)
 
----
+> **Enterprise-grade conversational AI Copilot, MCP Server, and autonomous workflow engine for Odoo 19.**  
+> Seamlessly connects with Odoo via its native **JSON-2 API with Zero Custom Addons required**.
 
-## Qué incluye
-
-- **Canal exclusivo**: Telegram mediante conversaciones privadas directas (grupos y canales se rechazan automáticamente antes de interactuar con Odoo).
-- **Orquestador**: n8n (versión 2.30.5) para la recepción visual de webhooks y entrega de respuestas.
-- **Backend y Capa de Control (`control-api`)**: Servicio en Node.js/Express que gestiona identidad, credenciales cifradas, límites de consumo, auditoría, invocación a LLMs y ejecución determinista hacia Odoo.
-- **Planificador Semántico (`ReadPlanV1`)**: Interpreta consultas en lenguaje natural, genera planes declarativos validados contra un catálogo administrado y ejecuta únicamente lecturas permitidas mediante JSON-2. Nunca ejecuta métodos arbitrarios de Odoo.
-- **Procesamiento Documental Seguro**: Recepción de facturas de proveedor en PDF, JPG o PNG; análisis antivirus con ClamAV previo a la visión; extracción de datos con LLM; previsualización con confirmación explícita (vence a los 5 minutos); y creación exclusiva en estado **borrador** en Odoo.
-- **Almacenamiento Auxiliar**: PostgreSQL para la base de datos de n8n, sesiones de memoria aisladas por `cliente + chat + usuario`, registro de auditoría y credenciales.
-- **Integración con Odoo**: Conexión nativa a Odoo 19 mediante JSON-2 utilizando la API key individual de cada usuario de Odoo (respetando permisos, compañías y trazabilidad nativa de Odoo).
-- **Criptografía Robusta**: Claves de Odoo cifradas en base de datos con AES-256-GCM. Paquetes de incorporación `.odooai` cifrados con RSA-3072 y AES-256-GCM.
-- **Modelos de IA**: OpenAI como preferencia predeterminada y Anthropic como alternativa configurable por comando (`/model`).
+[🇪🇸 **¿Prefieres leer en Español? Haz clic aquí para ver la documentación completa en español.**](README.es.md)
 
 ---
 
-## Arquitectura
+## 💡 Why Odoo AI Client Agent?
 
-```text
-Telegram (Chat Privado)
-    │
-    ▼ (Túnel HTTPS / Webhook)
-n8n (Orquestador de Flujos)
-    │
-    ▼ (HTTP Interno con API Key)
-API de Control (Node.js / Express)
-    ├── Antivirus (ClamAV) ── Escaneo previo de archivos PDF/JPG/PNG
-    ├── Base de Datos (PostgreSQL) ── Identidad, límites, auditoría, memoria
-    ├── Modelos LLM (OpenAI / Anthropic) ── Planificación ReadPlanV1 y Visión
-    └── Conector Odoo 19 ── JSON-2 con API Key individual del usuario
+Enterprises running Odoo often struggle to give mobile field teams, sales reps, and executives instant access to ERP data. Building custom Odoo Python modules increases maintenance overhead, breaks during yearly version upgrades, and exposes internal ORM vulnerabilities.
+
+**Odoo AI Client Agent** redefines ERP automation:
+- **Zero Custom Addons**: Interacts with Odoo 19 exclusively over standard JSON-2 endpoints using individual user API keys.
+- **3-Tier Operational Governance**: Balances agility and safety with autonomous low-risk tasks, supervisor-notified actions, and time-expiring confirmation codes for critical operations.
+- **Multi-Interface Ready**: Works through Telegram private direct chats, desktop AI clients via **Model Context Protocol (MCP)**, and a dedicated Consultant CLI.
+- **Declarative Business Workflows (YAML)**: Executes multi-step business logic and triggers without consuming expensive LLM tokens on every event.
+- **Bank-Grade Cryptography**: AES-256-GCM encrypted credential vaults and RSA-3072 sealed onboarding packages (`.odooai`).
+
+---
+
+## 🏗️ Architecture Overview
+
+```mermaid
+flowchart TD
+    subgraph Channels["Client Interaction Channels"]
+        TG["📱 Telegram (Private Direct Chat)"]
+        MCP["🤖 MCP Clients (Claude Desktop / Cursor / Antigravity)"]
+        CLI["💻 Consultant CLI (odoo-agent-cli)"]
+    end
+
+    subgraph Security["Orchestration & Security Perimeter"]
+        N8N["n8n Workflow Engine & Webhook Receiver"]
+        CLAM["ClamAV Antivirus Daemon (PDF / Images)"]
+        DB[(PostgreSQL Aux DB\nIdentity, Memory, Governance)]
+    end
+
+    subgraph Core["Control-API (Node.js 22 LTS)"]
+        CRYPTO["AES-256-GCM & Identity Manager"]
+        PLAN["Semantic Read Planner (ReadPlanV1)"]
+        GOV["3-Tier Action Governance Engine"]
+        DSL["YAML Business Workflow Engine (Zero-Tokens)"]
+        SOP["SOP & Corporate Knowledge Engine"]
+        AUDIT["ERP Hygiene & Bottleneck Auditor"]
+    end
+
+    subgraph ERP["Odoo 19 ERP"]
+        ODOO_API["Native JSON-2 Protocol\n(No custom modules)"]
+        MODELS["Sales · Purchases · Invoices · CRM · Inventory · Partners"]
+    end
+
+    TG --> N8N
+    N8N --> Core
+    MCP --> Core
+    CLI --> Core
+    CLAM --> Core
+    Core <--> DB
+    Core <--> ODOO_API
+    ODOO_API <--> MODELS
 ```
 
 ---
 
-## Casos de Uso del Piloto
+## ✨ Key Features
 
-1. **Consultar órdenes de venta**: Búsqueda por cliente, estado, fecha o número de pedido.
-2. **Consultar órdenes de compra**: Consulta de pedidos de compra y estado de recepción.
-3. **Consultar precios de productos**: Búsqueda por nombre o referencia interna con tarifas vigentes.
-4. **Consultar inventario por producto y almacén**: Consulta de existencias disponibles y a mano.
-5. **Consultar facturas de cliente**: Estado de facturas, vencimientos y saldos pendientes.
-6. **Consultar clientes**: Búsqueda de contactos comerciales autorizados.
-7. **Recepción de facturas de proveedor**: Escaneo con ClamAV, extracción con visión, validación de duplicados y totales, confirmación interactiva y creación **únicamente en borrador** con el documento adjunto.
+### 1. 🛡️ Semantic Read Planner (`ReadPlanV1`)
+Queries are translated into bounded, declarative execution plans. 
+- Strict semantic field catalog and operator white-listing.
+- Prevents technical model/field injection or prompt-leakage of database internals.
+- Enforces user-specific Odoo multi-company and record-rule boundaries.
 
-> [!IMPORTANT]
-> El agente **no** publica facturas en firme, no registra pagos, no elimina registros, no crea proveedores automáticamente ni ejecuta pagos o transacciones bancarias.
+### 2. 🚦 3-Tier Operational Governance
+Every write action adheres to a deterministic governance matrix:
+- **Tier 1 (Autonomous)**: Create draft quotations, reassign sales representatives, update internal notes.
+- **Tier 2 (Supervised / Notified)**: Advance CRM stages or alter order lines; automatically notifies the team lead via Telegram.
+- **Tier 3 (Critical / Human-in-the-Loop)**: Confirm sale orders or validate warehouse pickings; generates a secure 6-digit confirmation code with a 15-minute expiration window.
+
+### 3. 📑 Declarative Business Workflows (DSL YAML)
+Define business workflows that run deterministically in sub-milliseconds:
+```yaml
+name: high-value-sale-auto-invoice
+trigger:
+  model: sale.order
+  event: on_write
+condition: "record.state == 'sale' and record.amount_total >= 10000"
+steps:
+  - action: odoo.create_draft_invoice
+    policy: autonomous
+  - action: odoo.assign_responsible
+    params:
+      user_id: 14
+    policy: notify_supervisor
+```
+
+### 4. 🔌 Model Context Protocol (MCP) Server
+Integrate your Odoo 19 instance directly into Claude Desktop, Cursor, or any MCP-compliant AI assistant:
+```json
+{
+  "mcpServers": {
+    "odoo": {
+      "command": "node",
+      "args": ["/path/to/control-api/bin/odoo-mcp.js", "--client", "demo-client"]
+    }
+  }
+}
+```
+Available tools include `consultar_orden_venta`, `consultar_inventario`, `consultar_facturas_cliente`, `crear_orden_venta_borrador`, `confirmar_orden_venta`, and ERP health audits.
+
+### 5. 🩺 ERP Health & Bottleneck Audits
+Automated diagnostic tools that continuously scan Odoo for operational risks:
+- **Data Hygiene**: Partners missing tax IDs (NIT/RUT), products with zero standard cost, negative stock levels.
+- **Bottlenecks**: Confirmed sale orders pending invoicing, delayed delivery slips past scheduled dates.
 
 ---
 
-## Modalidades de Instalación
+## ⚡ Quickstart
 
-### Opción 1: Docker Compose (Recomendado para Servidores)
+### Option A: Docker Compose (Recommended for Production)
 
-Requisitos: Docker Engine y Docker Compose v2.
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/jjaraujoa/Odoo-AI-Client-Agent.git
+   cd Odoo-AI-Client-Agent
+   ```
 
-1. Configurar variables de entorno:
+2. **Configure your environment**:
    ```bash
    cp .env.example .env
-   # Editar .env con las claves de OpenAI, Telegram, Postgres y llaves maestras
+   # Set your POSTGRES_PASSWORD, ODOO_CREDENTIAL_MASTER_KEY_B64, and LLM keys
    ```
-2. Levantar la pila completa:
+
+3. **Launch the stack**:
    ```bash
    docker compose up -d
    ```
-3. Importar los workflows en n8n desde `n8n/workflows/`.
 
----
-
-### Opción 2: WSL 2 sin Docker (Entornos Windows con Restricciones)
-
-Para estaciones Windows donde no se cuenta con permisos de Docker Desktop:
-
-1. Instalar dependencias en WSL (Ubuntu):
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File .\scripts\Install-Pilot-Wsl.ps1
-   ```
-2. Iniciar servicios en segundo plano:
-   ```powershell
-   .\scripts\Start-Pilot-Wsl.ps1
-   ```
-3. Importar workflows de n8n:
-   ```powershell
-   .\scripts\Import-Workflows-Wsl.ps1
-   ```
-4. Actualizar secretos desde `.env` sin exponerlos en consola:
-   ```powershell
-   .\scripts\Update-Secrets-Wsl.ps1
-   ```
-5. Iniciar túnel de desarrollo para Telegram:
-   ```powershell
-   .\scripts\Start-QuickTunnel-Wsl.ps1
+4. **Verify service health**:
+   ```bash
+   curl http://localhost:8080/health
+   # Returns: {"status":"ok","timestamp":"..."}
    ```
 
 ---
 
-## Incorporación de Clientes (Onboarding)
+### Option B: Local / WSL 2 Development
 
-Para incorporar un cliente de forma segura:
-
-1. El consultor genera el archivo `.odooai` a partir de la plantilla Excel usando la clave pública de la plataforma.
-2. El operador del servidor importa el paquete en la base de datos:
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File .\scripts\Importar-PaqueteCliente.ps1 -Paquete ".\ruta\al\paquete.odooai"
+1. **Install dependencies**:
+   ```bash
+   cd control-api
+   npm install
    ```
-3. El paquete descifra los datos en memoria, registra el cliente, almacena las credenciales cifradas con AES-256-GCM y activa los límites configurados.
+
+2. **Run automated test suite (121 unit & integration tests)**:
+   ```bash
+   npm run check
+   ```
+
+3. **Start the Control API**:
+   ```bash
+   npm start
+   ```
 
 ---
 
-## Documentación Técnica Adicional
+## 🛠️ Consultant CLI (`odoo-agent-cli`)
 
-Consulte la carpeta [`docs/`](docs/) para detalles profundos:
-- [Arquitectura Detallada](docs/arquitectura.md)
-- [Seguridad y Criptografía](docs/seguridad.md)
-- [Incorporación Segura (.odooai)](docs/incorporacion-segura.md)
-- [Instalación en WSL sin Docker](docs/instalacion-wsl-sin-docker.md)
-- [API Administrativa de Control](docs/api-administrativa.md)
+A developer-friendly CLI is included to automate client setup and workflow testing:
+
+```bash
+# Initialize an isolated client workspace
+node control-api/bin/odoo-agent-cli.js client init \
+  --slug acme-corp \
+  --name "ACME Corporation" \
+  --url "https://acme.odoo.com" \
+  --db "acme-prod"
+
+# Validate employee onboarding Excel template
+node control-api/bin/odoo-agent-cli.js users validate --file ./onboarding/consultant-kit/Plantilla-Users.xlsx
+
+# Dump ERP schema (including custom Studio fields)
+node control-api/bin/odoo-agent-cli.js schema dump --client acme-corp
+
+# Scaffold and validate a business workflow
+node control-api/bin/odoo-agent-cli.js flow new --client acme-corp --name fast-track
+node control-api/bin/odoo-agent-cli.js flow validate --path clients/acme-corp/workflows/fast-track.yaml
+node control-api/bin/odoo-agent-cli.js flow test --path clients/acme-corp/workflows/fast-track.yaml --payload '{"state":"sale","amount_total":15000}'
+```
+
+---
+
+## 🔒 Security Principles
+
+- **No Destructive Operations**: `unlink` (record deletion), bank payment reconciliation, and mass partner creation are hard-blocked by design.
+- **Never In Plain Text**: Individual Odoo user API keys and Telegram bot tokens are never logged, never returned in API payloads, and stored under AES-256-GCM.
+- **Isolated Memory**: Chat history and conversational context are partitioned per `(client_id, chat_id, user_id)`.
+
+Review our [Security Policy](SECURITY.md) for responsible disclosure.
+
+---
+
+## 🤝 Contributing
+
+Contributions are warmly welcomed! Please read our [Contributing Guidelines](CONTRIBUTING.md) to learn about our code standards, test requirements, and Pull Request process.
+
+---
+
+## 📜 License
+
+This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
+
+---
+
+**Crafted with care by [Jorge Araujo](https://github.com/jjaraujoa) / XETA.**  
+*Empowering enterprises with intelligent, safe, and transparent Odoo ERP copilots.*

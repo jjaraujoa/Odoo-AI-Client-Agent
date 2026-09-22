@@ -1,4 +1,4 @@
-﻿# Dependencias Node.js
+# Dependencias Node.js
 node_modules/
 .pnpm-store/
 npm-debug.log*
@@ -12,6 +12,7 @@ pnpm-debug.log*
 *.env
 *.pem
 *.key
+*.odooai
 !platform-public-key.pem
 
 # Runtime y temporales

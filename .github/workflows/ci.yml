@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Test & Lint (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [20.x, 22.x]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+          cache-dependency-path: control-api/package-lock.json
+
+      - name: Install dependencies
+        working-directory: control-api
+        run: npm ci
+
+      - name: Syntax verification
+        working-directory: control-api
+        run: |
+          node --check src/server.js
+          node --check bin/odoo-agent-cli.js
+          node --check bin/odoo-mcp.js
+
+      - name: Run test suite
+        working-directory: control-api
+        run: npm test

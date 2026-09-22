@@ -10,7 +10,9 @@ import { decryptSecret } from "../src/crypto.js";
 import { OdooJson2Client } from "../src/odoo.js";
 import { readClientWorkbook, syncUsersFromWorkbook, validateClientWorkbook } from "../src/excel-importer.js";
 
-const DEFAULT_CLIENTS_ROOT = "/Users/jorgearaujo/Proyectos/XETA/Clientes";
+const DEFAULT_CLIENTS_ROOT = process.env.ODOO_CLIENTS_ROOT
+  ? resolve(process.env.ODOO_CLIENTS_ROOT)
+  : resolve(process.cwd(), "clients");
 const TEMPLATE_EXCEL_PATH = resolve(import.meta.dirname, "../../onboarding/consultant-kit/Plantilla-Users.xlsx");
 
 function getClientDirectory(slug, args = {}, options = {}) {
@@ -501,43 +503,39 @@ ODOO_SERVICE_API_KEY=
       }
     }
 
-    try {
-      const odoo = new OdooJson2Client({
-        baseUrl,
-        database,
-        apiKey,
-      });
+    const odoo = new OdooJson2Client({
+      baseUrl,
+      database,
+      apiKey,
+    });
 
-      const fields = await odoo.searchRead(
-        "ir.model.fields",
-        [["model", "in", ["sale.order", "purchase.order", "account.move", "stock.picking", "res.partner", "product.product", "crm.lead"]]],
-        ["model", "name", "field_description", "ttype", "required", "readonly"],
-        { limit: 500 },
-      );
+    const fields = await odoo.searchRead(
+      "ir.model.fields",
+      [["model", "in", ["sale.order", "purchase.order", "account.move", "stock.picking", "res.partner", "product.product", "crm.lead"]]],
+      ["model", "name", "field_description", "ttype", "required", "readonly"],
+      { limit: 500 },
+    );
 
-      const studioFields = fields.filter((f) => f.name.startsWith("x_studio_") || f.name.startsWith("x_"));
-      const outputDir = getClientDirectory(slug, args, options);
-      await mkdir(outputDir, { recursive: true });
-      const outputPath = args.output ? resolve(baseDir, args.output) : join(outputDir, "schema.json");
+    const studioFields = fields.filter((f) => f.name.startsWith("x_studio_") || f.name.startsWith("x_"));
+    const outputDir = getClientDirectory(slug, args, options);
+    await mkdir(outputDir, { recursive: true });
+    const outputPath = args.output ? resolve(baseDir, args.output) : join(outputDir, "schema.json");
 
-      const dumpPayload = {
-        client_slug: slug,
-        extracted_at: new Date().toISOString(),
-        models_analyzed: [...new Set(fields.map((f) => f.model))],
-        total_fields: fields.length,
-        studio_fields_count: studioFields.length,
-        studio_fields: studioFields,
-        fields,
-      };
+    const dumpPayload = {
+      client_slug: slug,
+      extracted_at: new Date().toISOString(),
+      models_analyzed: [...new Set(fields.map((f) => f.model))],
+      total_fields: fields.length,
+      studio_fields_count: studioFields.length,
+      studio_fields: studioFields,
+      fields,
+    };
 
-      await writeFile(outputPath, JSON.stringify(dumpPayload, null, 2), "utf8");
-      console.log(`✅ Esquema exportado con éxito a: ${outputPath}`);
-      console.log(`   - Modelos analizados: ${dumpPayload.models_analyzed.join(", ")}`);
-      console.log(`   - Total campos: ${fields.length} (Campos personalizados Studio: ${studioFields.length})`);
-      return 0;
-    } finally {
-      await db.end();
-    }
+    await writeFile(outputPath, JSON.stringify(dumpPayload, null, 2), "utf8");
+    console.log(`✅ Esquema exportado con éxito a: ${outputPath}`);
+    console.log(`   - Modelos analizados: ${dumpPayload.models_analyzed.join(", ")}`);
+    console.log(`   - Total campos: ${fields.length} (Campos personalizados Studio: ${studioFields.length})`);
+    return 0;
   }
 
   // ==========================================

@@ -1,16 +1,43 @@
 {
   "name": "odoo-ai-agent-control-api",
   "version": "0.1.0",
-  "private": true,
+  "description": "Enterprise Control API, Model Context Protocol (MCP) Server & CLI for Odoo 19 AI Client Agent",
+  "license": "MIT",
+  "author": "Jorge Araujo <jjaraujoa@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jjaraujoa/Odoo-AI-Client-Agent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jjaraujoa/Odoo-AI-Client-Agent/issues"
+  },
+  "homepage": "https://github.com/jjaraujoa/Odoo-AI-Client-Agent#readme",
+  "keywords": [
+    "odoo",
+    "odoo-19",
+    "ai-agent",
+    "mcp",
+    "model-context-protocol",
+    "telegram-bot",
+    "copilot",
+    "json-2",
+    "enterprise-ai",
+    "zero-addons"
+  ],
+  "bin": {
+    "odoo-agent-cli": "./bin/odoo-agent-cli.js",
+    "odoo-mcp": "./bin/odoo-mcp.js"
+  },
   "type": "module",
   "packageManager": "pnpm@11.9.0",
   "engines": {
-    "node": ">=22"
+    "node": ">=20.0.0"
   },
   "scripts": {
     "start": "node src/server.js",
     "test": "node --test --test-reporter=spec",
-    "check": "node --check src/server.js && node --test",
+    "check": "npm run lint && node --test",
+    "lint": "node --check src/server.js && node --check bin/odoo-agent-cli.js && node --check bin/odoo-mcp.js",
     "evaluate:read-planner": "node scripts/evaluate-read-planner.js",
     "smoke:read-agent": "node scripts/smoke-read-agent.js"
   },

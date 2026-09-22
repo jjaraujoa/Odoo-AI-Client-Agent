@@ -1,7 +1,6 @@
 import { createHash, randomInt, randomUUID } from "node:crypto";
 import { AppError } from "./errors.js";
 import { estimateComplexity, selectModel } from "./models.js";
-import { relationId } from "./odoo.js";
 import { requireToolPolicy } from "./tools.js";
 import { scanBuffer } from "./antivirus.js";
 
