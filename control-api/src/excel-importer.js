@@ -1,7 +1,7 @@
 import modXlsx from "xlsx";
 import { AppError } from "./errors.js";
 import { encryptSecret } from "./crypto.js";
-import { OdooJson2Client } from "./odoo.js";
+import { OdooJson2Client, createOdooClient } from "./odoo.js";
 
 const XLSX = modXlsx.default || modXlsx;
 
@@ -299,10 +299,13 @@ export async function syncUsersFromWorkbook({
     // Si tiene API key y URL de Odoo, validar en tiempo real
     if (apiKey && client.odoo_base_url) {
       try {
-        const odooClient = new OdooJson2Client({
+        const odooClient = createOdooClient({
           baseUrl: client.odoo_base_url,
           database: client.odoo_database,
           apiKey,
+          login: user.odooLogin,
+          transport: client.settings?.api_transport || "auto",
+          odooVersion: client.settings?.odoo_server_version || null,
           timeoutMs: 10_000,
         });
         const context = await odooClient.call("res.users", "context_get", {});

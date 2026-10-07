@@ -1,26 +1,42 @@
-# Agente de Inteligencia Artificial para Clientes Odoo 19
+# Agente de Inteligencia Artificial para Clientes Odoo 🚀
 
 [![CI](https://github.com/jjaraujoa/Odoo-AI-Client-Agent/actions/workflows/ci.yml/badge.svg)](https://github.com/jjaraujoa/Odoo-AI-Client-Agent/actions/workflows/ci.yml)
 [![Licencia MIT](https://img.shields.io/badge/licencia-MIT-blue.svg)](LICENSE)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen.svg)](https://nodejs.org/)
-[![Odoo 19](https://img.shields.io/badge/odoo-19.0%20(Enterprise%20%7C%20Community)-purple.svg)](https://www.odoo.com/)
+[![Odoo 16-20](https://img.shields.io/badge/Odoo-16%20a%2020%20(Enterprise%20%7C%20Community)-purple.svg)](https://www.odoo.com/)
 [![Protocolo MCP](https://img.shields.io/badge/MCP-Compatible-orange.svg)](https://modelcontextprotocol.io/)
 
-> **Plataforma conversacional, copiloto empresarial y motor autónomo de flujos para Odoo 19** que opera a través de Telegram, Model Context Protocol (MCP) y CLI, conectándose nativamente mediante **JSON-2 sin instalar módulos personalizados en el ERP**.
+> **Un consultor y asistente 24/7 para tu empresa.**  
+> Plataforma conversacional, copiloto empresarial y motor autónomo de flujos para **Odoo (versiones 16 a 20)** que opera a través de Telegram, Model Context Protocol (MCP) y CLI, conectándose nativamente **sin instalar módulos personalizados en el ERP (Zero Custom Addons)**.
 
 *Read this document in English: [README.md](README.md)*
 
 ---
 
-## 🌟 Visión y Propósito del Proyecto
+## 💡 ¿Por Qué Odoo AI Client Agent? (Beneficios para tu Empresa)
 
-Las empresas que implementan Odoo a menudo enfrentan fricción cuando sus empleados comerciales, de almacén o directivos necesitan consultar métricas, registrar prospectos o crear borradores sobre la marcha. El enfoque tradicional requiere instalar módulos personalizados en Python, lo que complica migraciones futuras y compromete la seguridad del ERP.
+Las empresas que implementan Odoo a menudo enfrentan fricción cuando sus empleados comerciales, de almacén o directivos necesitan consultar métricas, registrar prospectos o crear borradores sobre la marcha. Los desarrollos tradicionales en Python encarecen el mantenimiento, complican las migraciones y abren riesgos de seguridad.
 
-**Odoo AI Client Agent** resuelve esto de raíz:
-1. **Cero Módulos Personalizados**: Se comunica con Odoo 19 exclusivamente a través de su API nativa JSON-2.
-2. **Gobernanza Operativa de 3 Niveles**: Diferencia entre acciones autónomas de bajo riesgo, acciones asistidas notificadas y acciones críticas que requieren código de confirmación con expiración temporal.
-3. **Multi-Canal & MCP Nativo**: Funciona como Bot privado de Telegram para usuarios móviles, como Servidor MCP para IDEs (Claude Desktop, Cursor, Antigravity) y como CLI para consultores funcionales.
-4. **Seguridad y Cifrado de Grado Bancario**: Almacenamiento de claves API mediante AES-256-GCM, incorporación empaquetada con RSA-3072 y aislamiento estricto por cliente.
+**Odoo AI Client Agent** funciona como un nuevo integrante del equipo: un analista estratégico, facilitador operativo y consultor de procesos continuo:
+
+1. **📊 Analista estratégico 24/7**: Resume el estado de ventas, inventario y finanzas al instante, genera reportes periódicos y advierte sobre cuellos de botella o malas prácticas antes de que cuesten dinero.
+2. **⚡ Potencia la productividad del equipo**: Cada colaborador cuenta con un copiloto inteligente a la mano que conoce qué pasos deben darse dentro del sistema.
+3. **📈 Informes a medida en lenguaje natural**: Pídele la información como si hablaras con un colega y obtén reportes claros, visuales y con datos en tiempo real.
+4. **🧹 Eliminación de trabajo monótono**: Reduce las tareas repetitivas y masivas que consumen horas al personal y lastran la agilidad del negocio.
+5. **🎓 Menor curva de aprendizaje**: Acompaña paso a paso a los nuevos empleados que apenas están aprendiendo a utilizar Odoo.
+6. **📱 Multicanal y sin costes ocultos**: Opéralo desde **Telegram** (próximamente **WhatsApp y Teams**) y conéctalo en tu escritorio a **Claude, ChatGPT o Cursor**, aprovechando las suscripciones de IA que tu empresa ya tiene contratadas.
+7. **⚙️ Automatización y Odoo Studio**: Agiliza la creación de flujos automatizados y simplifica la ejecución de registros masivos.
+8. **🛡️ Seguridad y tranquilidad directiva**: Cero riesgo de que la IA altere datos críticos por su cuenta; las operaciones clave siempre requieren confirmación humana, y cada empleado solo accede a lo que sus permisos de Odoo le permiten.
+9. **🔌 Cero instalaciones invasivas**: Conecta directo y limpio sin instalar módulos extraños en tu Odoo ni asumir costosos desarrollos a medida.
+10. **🔓 Libertad absoluta y cero ataduras**: Licencia Open Source (MIT); tu empresa no depende de una consultora ni tiene que pagar licencias mensuales por cada usuario.
+11. **🧱 Blindaje contra ciberataques**: Incluye capas de seguridad perimetral para proteger tu base de datos contra accesos no autorizados y manipulación de instrucciones (*prompt injection*).
+
+---
+
+### 📌 Compatibilidad de Versiones y Despliegue
+- **Versiones de Odoo**: Disponible y optimizado para **Odoo 19**, con compatibilidad y soporte para **Odoo 16, 17, 18 y la próxima versión 20** (mediante API estándar).
+- **Ediciones**: Odoo **Enterprise** y Odoo **Community**.
+- **Entornos**: Odoo **Online (SaaS)**, Odoo.sh y servidores locales/propios (**On-Premise**).
 
 ---
 

@@ -8,7 +8,7 @@ import { json, readJson } from "./http.js";
 import { ModelProviders } from "./providers.js";
 import { TelegramProcessor } from "./telegram.js";
 import { registerStoredTelegramWebhook } from "./onboarding.js";
-import { OdooJson2Client } from "./odoo.js";
+import { OdooJson2Client, createOdooClient } from "./odoo.js";
 import {
   configureClientModel,
   configureLimits,
@@ -60,7 +60,16 @@ async function resolveTenantOdooClient(db, config, client) {
   );
   if (!userRes.rows[0]) throw new AppError(403, "no_credentials", "No hay credenciales activas.");
   const apiKey = decryptSecret(userRes.rows[0], config.credentialMasterKey);
-  return new OdooJson2Client({ baseUrl: client.odoo_base_url, database: client.odoo_database, apiKey });
+  const user = userRes.rows[0];
+  return createOdooClient({
+    baseUrl: client.odoo_base_url,
+    database: client.odoo_database,
+    apiKey,
+    login: user.odoo_login,
+    uid: user.odoo_user_id,
+    transport: client.settings?.api_transport || "auto",
+    odooVersion: client.settings?.odoo_server_version || null,
+  });
 }
 
 const server = createServer(async (request, response) => {

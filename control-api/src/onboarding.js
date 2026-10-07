@@ -9,7 +9,7 @@ import {
 } from "./crypto.js";
 import { AppError } from "./errors.js";
 import { fetchJson } from "./http.js";
-import { OdooJson2Client } from "./odoo.js";
+import { OdooJson2Client, createOdooClient } from "./odoo.js";
 import { DEFAULT_TOOLS } from "./admin.js";
 import { SEMANTIC_CATALOG_VERSION, SEMANTIC_ENTITY_KEYS } from "./semantic-catalog.js";
 
@@ -189,10 +189,15 @@ async function validateOdooUser({ client, user, apiKey }) {
     };
   }
   try {
-    const odoo = new OdooJson2Client({
+    const database = cleanText(client.odoo_database);
+    const transport = client.settings?.api_transport || client.api_transport || "auto";
+    const odoo = createOdooClient({
       baseUrl,
-      database: cleanText(client.odoo_database),
+      database,
       apiKey,
+      login: requestedLogin,
+      transport,
+      odooVersion: client.settings?.odoo_server_version || null,
       timeoutMs: 15_000,
     });
     const context = await odoo.call("res.users", "context_get", {});
