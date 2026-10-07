@@ -1,7 +1,7 @@
 import { inTransaction } from "./db.js";
 import { encryptSecret } from "./crypto.js";
 import { AppError } from "./errors.js";
-import { OdooJson2Client } from "./odoo.js";
+import { OdooJson2Client, createOdooClient } from "./odoo.js";
 import { SEMANTIC_CATALOG_VERSION, SEMANTIC_ENTITY_KEYS } from "./semantic-catalog.js";
 
 export const DEFAULT_TOOLS = [
@@ -98,10 +98,13 @@ export async function registerLinkedUser(db, config, body) {
   const client = clientResult.rows[0];
   if (!client) throw new AppError(404, "client_not_found", "Cliente no encontrado.");
 
-  const odoo = new OdooJson2Client({
+  const odoo = createOdooClient({
     baseUrl: client.odoo_base_url,
     database: client.odoo_database,
     apiKey,
+    login: odooLogin,
+    transport: client.settings?.api_transport || "auto",
+    odooVersion: client.settings?.odoo_server_version || null,
     timeoutMs: 15_000,
   });
   let odooUserId;

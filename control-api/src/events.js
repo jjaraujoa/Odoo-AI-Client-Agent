@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { AppError } from "./errors.js";
 import { decryptNamedSecret, decryptSecret } from "./crypto.js";
 import { buildOdooDeepLink, dispatchNotification, formatEventNotificationText } from "./notifications.js";
-import { OdooJson2Client } from "./odoo.js";
+import { OdooJson2Client, createOdooClient } from "./odoo.js";
 import { processEventThroughWorkflows } from "./workflow-engine.js";
 
 export function computeEventFingerprint(clientId, model, resId, payload) {
@@ -234,10 +234,15 @@ export async function processOdooEvent({ db, config, body }) {
     let odooClient = null;
     if (userRes.rows[0]) {
       const apiKey = decryptSecret(userRes.rows[0], config.credentialMasterKey);
-      odooClient = new OdooJson2Client({
+      const user = userRes.rows[0];
+      odooClient = createOdooClient({
         baseUrl: client.odoo_base_url,
         database: client.odoo_database,
         apiKey,
+        login: user.odoo_login,
+        uid: user.odoo_user_id,
+        transport: client.settings?.api_transport || "auto",
+        odooVersion: client.settings?.odoo_server_version || null,
       });
     }
     workflowExecutions = await processEventThroughWorkflows({

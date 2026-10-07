@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { loadConfig } from "../src/config.js";
 import { createDb } from "../src/db.js";
-import { OdooJson2Client } from "../src/odoo.js";
+import { OdooJson2Client, createOdooClient } from "../src/odoo.js";
 import { McpServer } from "../src/mcp-server.js";
 import { decryptSecret } from "../src/crypto.js";
 
@@ -81,10 +81,14 @@ async function main() {
         process.exit(1);
       }
 
-      const odoo = new OdooJson2Client({
+      const odoo = createOdooClient({
         baseUrl,
         database,
         apiKey,
+        login: userLogin || clientConfig.odoo_login || null,
+        transport: envSecrets.ODOO_API_TRANSPORT || clientConfig.api_transport || process.env.ODOO_API_TRANSPORT || "auto",
+        odooVersion: clientConfig.odoo_server_version || null,
+        enableMcp: true,
       });
 
       // Conexión opcional a base de datos de control
@@ -178,10 +182,15 @@ async function main() {
       process.exit(1);
     }
 
-    const odoo = new OdooJson2Client({
+    const odoo = createOdooClient({
       baseUrl: client.odoo_base_url,
       database: client.odoo_database,
       apiKey,
+      login: linkedUser?.odoo_login || null,
+      uid: linkedUser?.odoo_user_id || null,
+      transport: client.settings?.api_transport || process.env.ODOO_API_TRANSPORT || "auto",
+      odooVersion: client.settings?.odoo_server_version || null,
+      enableMcp: true,
     });
 
     const mcpServer = new McpServer({

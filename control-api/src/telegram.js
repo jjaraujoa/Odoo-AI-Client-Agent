@@ -13,7 +13,7 @@ import {
   downloadTelegramFile,
   prepareInvoice,
 } from "./invoices.js";
-import { OdooJson2Client } from "./odoo.js";
+import { OdooJson2Client, createOdooClient } from "./odoo.js";
 import { audit, textSummary } from "./audit.js";
 import { handleSemanticRead, planSemanticReadShadow } from "./read-agent.js";
 import { readPlannerMode } from "./semantic-catalog.js";
@@ -186,10 +186,14 @@ export class TelegramProcessor {
       await consumeRateLimit(this.db, identity, limits);
       lease = await acquireConcurrency(this.db, identity, limits);
       session = await getOrCreateSession(this.db, identity, parsed.chatId, limits);
-      const odoo = new OdooJson2Client({
+      const odoo = createOdooClient({
         baseUrl: identity.odoo_base_url,
         database: identity.odoo_database,
         apiKey: identity.odooApiKey,
+        login: identity.odoo_login,
+        uid: identity.odoo_user_id,
+        transport: identity.client_settings?.api_transport || "auto",
+        odooVersion: identity.client_settings?.odoo_server_version || null,
         timeoutMs: Number(limits.request_timeout_seconds) * 1000,
       });
 

@@ -7,7 +7,7 @@ import { parseWorkflowYaml, evaluateCondition } from "../src/workflow-parser.js"
 import { loadConfig } from "../src/config.js";
 import { createDb } from "../src/db.js";
 import { decryptSecret } from "../src/crypto.js";
-import { OdooJson2Client } from "../src/odoo.js";
+import { OdooJson2Client, createOdooClient, detectInstance } from "../src/odoo.js";
 import { readClientWorkbook, syncUsersFromWorkbook, validateClientWorkbook } from "../src/excel-importer.js";
 
 const DEFAULT_CLIENTS_ROOT = process.env.ODOO_CLIENTS_ROOT
@@ -49,6 +49,9 @@ COMANDOS DE CLIENTE:
 
   client status --client <slug>
       Consulta el estado general del cliente: conexión, usuarios activos, flujos y SOPs.
+
+  instance detect [--url <url>] [--client <slug>]
+      Sondea e identifica la versión de Odoo (14 a 20), serie técnica y transporte recomendado (JSON-2, Legacy RPC o MCP).
 
   users validate [--client <slug>] [--file <ruta_xlsx>]
       Verifica y audita la arquitectura de la plantilla Excel (encabezados, unicidad de IDs,
@@ -503,10 +506,11 @@ ODOO_SERVICE_API_KEY=
       }
     }
 
-    const odoo = new OdooJson2Client({
+    const odoo = createOdooClient({
       baseUrl,
       database,
       apiKey,
+      transport: process.env.ODOO_API_TRANSPORT || "auto",
     });
 
     const fields = await odoo.searchRead(
@@ -705,6 +709,55 @@ notifications:
       return 0;
     } catch (err) {
       console.error(`❌ Error al exportar flujos: ${err.message}`);
+      return 1;
+    }
+  }
+
+  // ==========================================
+  // COMANDO: instance detect
+  // ==========================================
+  if (command === "instance" && subcommand === "detect") {
+    let url = args.url;
+    const slug = args.client || args.slug;
+    if (!url && slug) {
+      const clientDir = getClientDirectory(slug, args, options);
+      if (existsSync(join(clientDir, "cliente.yaml"))) {
+        const yamlRaw = await readFile(join(clientDir, "cliente.yaml"), "utf8");
+        const clientConfig = parseYaml(yamlRaw);
+        url = clientConfig?.odoo_base_url;
+      } else {
+        const config = loadConfig();
+        const db = createDb(config.databaseUrl);
+        try {
+          const res = await db.query("SELECT odoo_base_url FROM agent.clients WHERE slug = $1", [slug]);
+          url = res.rows[0]?.odoo_base_url;
+        } finally {
+          await db.end().catch(() => {});
+        }
+      }
+    }
+    if (!url) {
+      console.error("❌ Error: Se requiere --url <https://odoo.ejemplo.com> o --client <slug>");
+      return 1;
+    }
+    try {
+      console.log(`🔍 Sondeando versión de Odoo en: ${url}...`);
+      const info = await detectInstance(url);
+      console.log(`✅ Instancia identificada exitosamente:`);
+      console.log(`   - URL Base: ${info.baseUrl}`);
+      console.log(`   - Versión de Odoo: ${info.server_version || "No especificada"}`);
+      console.log(`   - Serie técnica: ${info.server_series || "Desconocida"}`);
+      console.log(`   - Transporte recomendado: ${info.transport}`);
+      if (info.transport === "legacy_rpc") {
+        console.log(`   ℹ️  Esta versión utiliza el protocolo RPC heredado (14 a 18). Requiere database y login.`);
+      } else if (info.transport === "json2" && info.server_series === "20.0") {
+        console.log(`   ℹ️  Odoo 20 detectado. Admite REST JSON-2 y MCP nativo (/mcp ai_mcp).`);
+      } else if (info.transport === "json2") {
+        console.log(`   ℹ️  Odoo 19 detectado. Admite REST JSON-2 nativo con API Key Bearer.`);
+      }
+      return 0;
+    } catch (err) {
+      console.error(`❌ Error al detectar instancia: ${err.message}`);
       return 1;
     }
   }
