@@ -19,6 +19,58 @@ export async function requestOrExecuteAction({
   const policy = await requireToolPolicy(db, client.id, actionName);
   const riskLevel = Number(policy.risk_level || 1);
   const confirmationRequired = Boolean(policy.confirmation_required);
+  const env = String(client.settings?.environment || client.environment || "production").toLowerCase();
+  const isStaging = env === "staging" || env === "test";
+
+  // En staging: Las acciones de Nivel 3 o con confirmación obligatoria se auto-aprueban
+  // para agilizar pruebas de integración y desarrollo sin bloquear al usuario
+  if (isStaging && (confirmationRequired || riskLevel >= 3)) {
+    let result;
+    try {
+      result = await executeOperationalAction(actionName, odoo, params);
+      await db.query(
+        `INSERT INTO agent.action_executions
+           (client_id, linked_user_id, action_name, model, res_id, risk_level, status, input_params, result_data)
+         VALUES ($1, $2, $3, $4, $5, $6, 'executed_staging', $7, $8)`,
+        [
+          client.id,
+          linkedUser?.id || null,
+          actionName,
+          result.model || "unknown",
+          result.record_id || null,
+          riskLevel,
+          JSON.stringify(params),
+          JSON.stringify(result),
+        ],
+      );
+      return {
+        status: "executed",
+        risk_level: riskLevel,
+        staging_bypass: true,
+        environment: "staging",
+        note: "Auto-aprobado en entorno Staging para validación ágil.",
+        result,
+        supervisor_notified: false,
+      };
+    } catch (err) {
+      await db.query(
+        `INSERT INTO agent.action_executions
+           (client_id, linked_user_id, action_name, model, res_id, risk_level, status, input_params, result_data)
+         VALUES ($1, $2, $3, $4, $5, $6, 'failed', $7, $8)`,
+        [
+          client.id,
+          linkedUser?.id || null,
+          actionName,
+          params.model || "unknown",
+          params.resId ? Number(params.resId) : null,
+          riskLevel,
+          JSON.stringify(params),
+          JSON.stringify({ error: err.message }),
+        ],
+      );
+      throw err;
+    }
+  }
 
   // Nivel 1 o 2 sin confirmación obligatoria: ejecución directa
   if (!confirmationRequired && riskLevel <= 2) {
@@ -59,9 +111,9 @@ export async function requestOrExecuteAction({
       throw err;
     }
 
-    // Nivel 2: Asistido con aviso al supervisor
+    // Nivel 2: Asistido con aviso al supervisor (solo en producción para no generar spam en staging)
     let supervisorNotified = false;
-    if (riskLevel === 2) {
+    if (riskLevel === 2 && !isStaging) {
       const deepLink = result.record_id && result.model
         ? buildOdooDeepLink(client.odoo_base_url, result.model, result.record_id)
         : null;

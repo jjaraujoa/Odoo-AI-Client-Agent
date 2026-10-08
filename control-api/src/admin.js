@@ -18,6 +18,18 @@ export const DEFAULT_TOOLS = [
   ["cambiar_etapa_registro", 2, false, ["stage_id", "state"]],
   ["confirmar_orden_venta", 3, true, ["id"]],
   ["validar_albaran_entrega", 3, true, ["id"]],
+  ["registrar_pago_factura", 3, true, ["invoiceId", "amount", "journalId", "paymentDate"]],
+  ["crear_anticipo_venta", 1, false, ["saleOrderId", "advancePaymentMethod", "amount", "depositAccountId"]],
+  ["crear_nota_credito", 3, true, ["moveId", "reason", "refundMethod", "date"]],
+  ["convertir_iniciativa_crm", 2, false, ["leadId", "action", "partnerId"]],
+  ["perder_oportunidad_crm", 2, false, ["leadId", "lostReasonId"]],
+  ["cancelar_orden_venta", 3, true, ["resId"]],
+  ["cancelar_factura", 3, true, ["resId"]],
+  ["cancelar_albaran_entrega", 3, true, ["resId"]],
+  ["inspeccionar_campos_studio", 1, false, ["model"]],
+  ["inspeccionar_tablero", 1, false, ["dashboardId"]],
+  ["validar_tablero", 1, false, ["spreadsheetData"]],
+  ["crear_o_actualizar_tablero", 2, false, ["name", "spreadsheetData", "dashboardId"]],
 ];
 
 function requireString(body, key) {

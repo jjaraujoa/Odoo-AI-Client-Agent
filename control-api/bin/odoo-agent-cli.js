@@ -9,6 +9,8 @@ import { createDb } from "../src/db.js";
 import { decryptSecret } from "../src/crypto.js";
 import { OdooJson2Client, createOdooClient, detectInstance } from "../src/odoo.js";
 import { readClientWorkbook, syncUsersFromWorkbook, validateClientWorkbook } from "../src/excel-importer.js";
+import { auditFunctionalConfiguration, inspectStudioFields } from "../src/audit-business.js";
+import { inspectDashboard, validateSpreadsheetDefinition } from "../src/spreadsheet.js";
 
 const DEFAULT_CLIENTS_ROOT = process.env.ODOO_CLIENTS_ROOT
   ? resolve(process.env.ODOO_CLIENTS_ROOT)
@@ -79,6 +81,16 @@ COMANDOS DE FLUJOS (WORKFLOW DSL):
 
   flow export --client <slug> [--output <path>]
       Empaqueta los flujos y metadatos del cliente para distribución.
+
+COMANDOS DE AUDITORÍA Y TABLEROS:
+  audit config --client <slug>
+      Inspecciona la parametrización funcional de Odoo (fechas de bloqueo, métodos de valoración de inventario, aprobación de compras).
+
+  spreadsheet inspect --client <slug> [--dashboard-id <id>] [--output <path>]
+      Inspecciona tableros y hojas de cálculo (spreadsheet.dashboard) de Odoo 18/19 y descarga su JSON.
+
+  spreadsheet validate <archivo.json> [--fix]
+      Valida la estructura de un tablero JSON: enlaces odoo://view con action anidado, dominios 2D y caracteres limpios.
 
 OPCIONES:
   --client, --slug <slug>   Identificador del cliente (minúsculas, sin espacios)
@@ -758,6 +770,168 @@ notifications:
       return 0;
     } catch (err) {
       console.error(`❌ Error al detectar instancia: ${err.message}`);
+      return 1;
+    }
+  }
+
+  async function resolveClientOdoo(slug) {
+    let baseUrl = args.url;
+    let database = args.db;
+    let apiKey = args["api-key"];
+
+    const clientDir = getClientDirectory(slug, args, options);
+    if (existsSync(join(clientDir, "cliente.yaml"))) {
+      const yamlRaw = await readFile(join(clientDir, "cliente.yaml"), "utf8");
+      const clientConfig = parseYaml(yamlRaw);
+      if (!baseUrl) baseUrl = clientConfig?.odoo_base_url;
+      if (!database) database = clientConfig?.odoo_database;
+    }
+
+    const envFile = join(clientDir, ".env");
+    if (!apiKey && existsSync(envFile)) {
+      const envRaw = await readFile(envFile, "utf8");
+      for (const line of envRaw.split("\n")) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith("ODOO_SERVICE_API_KEY=")) {
+          apiKey = trimmed.slice("ODOO_SERVICE_API_KEY=".length).trim().replace(/^["']|["']$/g, "");
+        }
+      }
+    }
+
+    if (!apiKey) {
+      const config = loadConfig();
+      const db = createDb(config.databaseUrl);
+      try {
+        const clientRes = await db.query("SELECT * FROM agent.clients WHERE slug = $1 AND active", [slug]);
+        const client = clientRes.rows[0];
+        if (!client) {
+          throw new Error(`Cliente '${slug}' no encontrado en BD ni con API key en carpeta local.`);
+        }
+        if (!baseUrl) baseUrl = client.odoo_base_url;
+        if (!database) database = client.odoo_database;
+
+        const userRes = await db.query(
+          `SELECT u.*, c.ciphertext, c.nonce, c.auth_tag, c.key_version
+             FROM agent.linked_users u
+             JOIN agent.odoo_credentials c ON c.linked_user_id = u.id
+            WHERE u.client_id = $1 AND u.active
+            ORDER BY u.created_at ASC LIMIT 1`,
+          [client.id],
+        );
+        if (userRes.rows[0]) {
+          apiKey = decryptSecret(userRes.rows[0], config.credentialMasterKey);
+        }
+      } finally {
+        await db.end().catch(() => {});
+      }
+    }
+
+    if (!apiKey || !baseUrl) {
+      throw new Error(`No se pudieron determinar las credenciales o URL de Odoo para el cliente '${slug}'.`);
+    }
+
+    return createOdooClient({
+      baseUrl,
+      database,
+      apiKey,
+      transport: process.env.ODOO_API_TRANSPORT || "auto",
+    });
+  }
+
+  // ==========================================
+  // COMANDO: audit config
+  // ==========================================
+  if (command === "audit" && subcommand === "config") {
+    const slug = args.client || args.slug;
+    if (!slug) {
+      console.error("❌ Error: Se requiere --client <slug>");
+      return 1;
+    }
+    try {
+      const odoo = await resolveClientOdoo(slug);
+      console.log(`🔎 Auditando configuración funcional de Odoo para cliente '${slug}'...`);
+      const issues = await auditFunctionalConfiguration(odoo);
+      if (issues.length === 0) {
+        console.log("✅ Configuración funcional óptima: No se detectaron desalineaciones en fechas de bloqueo, inventarios ni aprobaciones de compra.");
+      } else {
+        console.log(`⚠️  Se detectaron ${issues.length} observaciones de parametrización funcional:\n`);
+        for (const iss of issues) {
+          const icon = iss.severity === "critical" ? "🚨" : iss.severity === "warning" ? "⚠️" : "ℹ️";
+          console.log(`${icon} [${iss.severity.toUpperCase()}] ${iss.title} (${iss.count} ocurrencias)`);
+          console.log(`   • Código: ${iss.code}`);
+          console.log(`   • Recomendación: ${iss.recommendation}`);
+          console.log("");
+        }
+      }
+      return 0;
+    } catch (err) {
+      console.error(`❌ Error al auditar configuración: ${err.message}`);
+      return 1;
+    }
+  }
+
+  // ==========================================
+  // COMANDO: spreadsheet inspect
+  // ==========================================
+  if (command === "spreadsheet" && subcommand === "inspect") {
+    const slug = args.client || args.slug;
+    if (!slug) {
+      console.error("❌ Error: Se requiere --client <slug>");
+      return 1;
+    }
+    const dashboardId = args["dashboard-id"] ? Number(args["dashboard-id"]) : null;
+    try {
+      const odoo = await resolveClientOdoo(slug);
+      console.log(`📊 Inspeccionando tableros de hojas de cálculo en cliente '${slug}'...`);
+      const result = await inspectDashboard(odoo, dashboardId);
+      if (dashboardId) {
+        console.log(`✅ Tablero ID ${result.id} (${result.name}):`);
+        console.log(`   - Hojas: ${result.data?.sheets?.length || 0}`);
+        const clientDir = getClientDirectory(slug, args, options);
+        await mkdir(clientDir, { recursive: true });
+        const outPath = args.output ? resolve(baseDir, args.output) : join(clientDir, `dashboard-${result.id}.json`);
+        await writeFile(outPath, JSON.stringify(result.data, null, 2), "utf8");
+        console.log(`   💾 Definición guardada en: ${outPath}`);
+      } else {
+        console.log(`✅ Se encontraron ${result.dashboards.length} tableros disponibles:`);
+        for (const dash of result.dashboards) {
+          console.log(`   • ID ${dash.id}: ${dash.name}`);
+        }
+      }
+      return 0;
+    } catch (err) {
+      console.error(`❌ Error al inspeccionar hojas de cálculo: ${err.message}`);
+      return 1;
+    }
+  }
+
+  // ==========================================
+  // COMANDO: spreadsheet validate
+  // ==========================================
+  if (command === "spreadsheet" && subcommand === "validate") {
+    const filePath = args._[2];
+    if (!filePath) {
+      console.error("❌ Error: Especifica el archivo JSON a validar: odoo-agent-cli spreadsheet validate <archivo.json>");
+      return 1;
+    }
+    try {
+      const fullPath = resolve(baseDir, filePath);
+      const raw = await readFile(fullPath, "utf8");
+      const data = JSON.parse(raw);
+      const report = validateSpreadsheetDefinition(data);
+
+      console.log(`🔍 Validación de Hoja de Cálculo: ${filePath}`);
+      if (report.valid) {
+        console.log("✅ Estructura 100% válida y conforme con Odoo 18/19 (enlaces odoo://view con action anidado y dominios AST 2D).");
+      } else {
+        console.log(`❌ Se encontraron ${report.errors.length} errores de estructura:`);
+        for (const err of report.errors) {
+          console.log(`   • ${err}`);
+        }
+      }
+      return report.valid ? 0 : 1;
+    } catch (err) {
+      console.error(`❌ Error al validar hoja de cálculo: ${err.message}`);
       return 1;
     }
   }

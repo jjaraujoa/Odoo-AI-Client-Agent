@@ -1,7 +1,8 @@
 import { createInterface } from "node:readline";
 import { requestOrExecuteAction, confirmOperationalAction } from "./governance.js";
 import { answerSopQuery } from "./sops.js";
-import { runFullBusinessAudit } from "./audit-business.js";
+import { runFullBusinessAudit, inspectStudioFields } from "./audit-business.js";
+import { inspectDashboard, validateSpreadsheetDefinition, createOrUpdateDashboard } from "./spreadsheet.js";
 
 export const MCP_TOOLS = [
   {
@@ -220,6 +221,155 @@ export const MCP_TOOLS = [
       },
     },
   },
+  {
+    name: "registrar_pago_factura",
+    description: "Registra un pago de factura mediante el wizard account.payment.register (Nivel 3).",
+    inputSchema: {
+      type: "object",
+      required: ["invoiceId"],
+      properties: {
+        invoiceId: { type: "integer", description: "ID de la factura (account.move)" },
+        amount: { type: "number", description: "Monto a pagar (opcional, por defecto el saldo residual)" },
+        journalId: { type: "integer", description: "ID del diario de pago (banco/efectivo)" },
+        paymentDate: { type: "string", description: "Fecha de pago YYYY-MM-DD" },
+        communication: { type: "string", description: "Referencia o memo" },
+      },
+    },
+  },
+  {
+    name: "crear_anticipo_venta",
+    description: "Genera factura de anticipo para una orden de venta mediante sale.advance.payment.inv (Nivel 1).",
+    inputSchema: {
+      type: "object",
+      required: ["saleOrderId"],
+      properties: {
+        saleOrderId: { type: "integer", description: "ID de la orden de venta" },
+        advancePaymentMethod: { type: "string", enum: ["delivered", "percentage", "fixed"], default: "delivered" },
+        amount: { type: "number", description: "Porcentaje o monto fijo si aplica" },
+        depositAccountId: { type: "integer", description: "ID de la cuenta contable de anticipo" },
+      },
+    },
+  },
+  {
+    name: "crear_nota_credito",
+    description: "Emite una nota de crédito / rectificativa mediante account.move.reversal (Nivel 3).",
+    inputSchema: {
+      type: "object",
+      required: ["moveId"],
+      properties: {
+        moveId: { type: "integer", description: "ID de la factura a rectificar" },
+        reason: { type: "string", description: "Motivo de la rectificación" },
+        refundMethod: { type: "string", enum: ["refund", "cancel"], default: "refund" },
+        date: { type: "string", description: "Fecha contable YYYY-MM-DD" },
+      },
+    },
+  },
+  {
+    name: "convertir_iniciativa_crm",
+    description: "Convierte una iniciativa en oportunidad comercial en el CRM mediante crm.lead2opportunity.partner (Nivel 2).",
+    inputSchema: {
+      type: "object",
+      required: ["leadId"],
+      properties: {
+        leadId: { type: "integer", description: "ID de la iniciativa" },
+        action: { type: "string", enum: ["create", "exist", "nothing"], default: "create" },
+        partnerId: { type: "integer", description: "ID de cliente existente si action es 'exist'" },
+        userId: { type: "integer", description: "ID del comercial asignado" },
+        teamId: { type: "integer", description: "ID del equipo de ventas" },
+      },
+    },
+  },
+  {
+    name: "perder_oportunidad_crm",
+    description: "Marca una oportunidad como perdida en el CRM mediante crm.lead.lost (Nivel 2).",
+    inputSchema: {
+      type: "object",
+      required: ["leadId"],
+      properties: {
+        leadId: { type: "integer", description: "ID de la oportunidad" },
+        lostReasonId: { type: "integer", description: "ID del motivo de pérdida (crm.lost.reason)" },
+        lostFeedback: { type: "string", description: "Comentarios u observaciones" },
+      },
+    },
+  },
+  {
+    name: "cancelar_orden_venta",
+    description: "Cancela una orden de venta de forma controlada sin borrado físico (Nivel 3).",
+    inputSchema: {
+      type: "object",
+      required: ["resId"],
+      properties: {
+        resId: { type: "integer", description: "ID de la orden de venta" },
+      },
+    },
+  },
+  {
+    name: "cancelar_factura",
+    description: "Cancela una factura en borrador o publicada sin borrado físico (Nivel 3).",
+    inputSchema: {
+      type: "object",
+      required: ["resId"],
+      properties: {
+        resId: { type: "integer", description: "ID de la factura" },
+      },
+    },
+  },
+  {
+    name: "cancelar_albaran_entrega",
+    description: "Cancela un albarán de entrega o recepción sin borrado físico (Nivel 3).",
+    inputSchema: {
+      type: "object",
+      required: ["resId"],
+      properties: {
+        resId: { type: "integer", description: "ID del albarán" },
+      },
+    },
+  },
+  {
+    name: "inspeccionar_campos_studio",
+    description: "Inspecciona campos personalizados Studio (x_ o x_studio_) en un modelo de Odoo.",
+    inputSchema: {
+      type: "object",
+      required: ["model"],
+      properties: {
+        model: { type: "string", description: "Nombre técnico del modelo en Odoo, ej. 'sale.order', 'res.partner'" },
+      },
+    },
+  },
+  {
+    name: "inspeccionar_tablero",
+    description: "Inspecciona y descarga la definición de hojas de cálculo o tableros en Odoo 18/19.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        dashboardId: { type: "integer", description: "ID opcional del tablero (spreadsheet.dashboard) a inspeccionar" },
+      },
+    },
+  },
+  {
+    name: "validar_tablero",
+    description: "Valida la estructura de una hoja de cálculo Odoo (enlaces odoo://view con action anidado, AST 2D y Unicode).",
+    inputSchema: {
+      type: "object",
+      required: ["spreadsheetData"],
+      properties: {
+        spreadsheetData: { type: "object", description: "Estructura JSON de la hoja de cálculo a validar" },
+      },
+    },
+  },
+  {
+    name: "crear_o_actualizar_tablero",
+    description: "Crea o actualiza un tablero de hoja de cálculo en Odoo asegurando conformidad estricta (Nivel 2).",
+    inputSchema: {
+      type: "object",
+      required: ["name", "spreadsheetData"],
+      properties: {
+        name: { type: "string", description: "Nombre del tablero" },
+        spreadsheetData: { type: "object", description: "JSON de la hoja de cálculo" },
+        dashboardId: { type: "integer", description: "ID si se desea actualizar uno existente" },
+      },
+    },
+  },
 ];
 
 export class McpServer {
@@ -389,6 +539,20 @@ export class McpServer {
         client: this.client,
         reportType: args.reportType || "operational_health",
       });
+    }
+
+    // Inspección Studio y Tableros / Hojas de Cálculo
+    if (name === "inspeccionar_campos_studio") {
+      return inspectStudioFields(this.odoo, args.model);
+    }
+    if (name === "inspeccionar_tablero") {
+      return inspectDashboard(this.odoo, args.dashboardId);
+    }
+    if (name === "validar_tablero") {
+      return validateSpreadsheetDefinition(args.spreadsheetData);
+    }
+    if (name === "crear_o_actualizar_tablero") {
+      return createOrUpdateDashboard(this.odoo, args);
     }
 
     // 3. Acciones operativas bajo motor de gobernanza
