@@ -141,6 +141,114 @@ export async function auditBottlenecks(odoo) {
   return issues;
 }
 
+export async function inspectStudioFields(odoo, modelName) {
+  if (!modelName) {
+    throw new Error("El parámetro modelName es obligatorio para inspeccionar campos Studio.");
+  }
+  try {
+    const fields = await odoo.searchRead(
+      "ir.model.fields",
+      [
+        ["model", "=", modelName],
+        "|",
+        ["name", "=like", "x_%"],
+        ["name", "=like", "x_studio_%"],
+      ],
+      ["name", "field_description", "ttype", "required", "readonly", "selection"],
+      { limit: 100 },
+    );
+    return fields.map((f) => ({
+      name: f.name,
+      label: f.field_description,
+      type: f.ttype,
+      required: Boolean(f.required),
+      readonly: Boolean(f.readonly),
+      selection: f.selection || null,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+export async function auditFunctionalConfiguration(odoo) {
+  const issues = [];
+
+  // 1. Fechas de bloqueo contable y fiscal en res.company
+  try {
+    const companies = await odoo.searchRead(
+      "res.company",
+      [],
+      ["name", "fiscalyear_lock_date", "period_lock_date", "tax_lock_date"],
+      { limit: 10 },
+    );
+
+    const unlockedCompanies = companies.filter(
+      (c) => !c.fiscalyear_lock_date && !c.period_lock_date,
+    );
+
+    if (unlockedCompanies.length > 0) {
+      issues.push({
+        code: "fiscal_lock_date_missing",
+        category: "functional_config",
+        severity: "warning",
+        title: "Fechas de Bloqueo Contable No Configuradas",
+        count: unlockedCompanies.length,
+        items: unlockedCompanies.map((c) => ({ id: c.id, name: c.name })),
+        recommendation:
+          "Establecer la fecha de bloqueo contable o fiscal para evitar modificaciones retroactivas en ejercicios fiscales ya cerrados.",
+      });
+    }
+  } catch {}
+
+  // 2. Valoración de inventarios en categorías de producto
+  try {
+    const categories = await odoo.searchRead(
+      "product.category",
+      [["property_valuation", "=", "manual_periodic"]],
+      ["name", "property_cost_method", "property_valuation"],
+      { limit: 10 },
+    );
+
+    if (categories.length > 0) {
+      issues.push({
+        code: "manual_inventory_valuation",
+        category: "functional_config",
+        severity: "info",
+        title: "Categorías de Producto con Valoración de Inventario Periódica (Manual)",
+        count: categories.length,
+        items: categories.map((c) => ({ id: c.id, name: c.name, method: c.property_cost_method })),
+        recommendation:
+          "Verificar si la empresa requiere valoración de existencias automatizada (real_time) para sincronizar libros contables con almacén.",
+      });
+    }
+  } catch {}
+
+  // 3. Doble validación en órdenes de compra
+  try {
+    const companiesWithoutDoubleValidation = await odoo.searchRead(
+      "res.company",
+      [["po_double_validation", "=", "none"]],
+      ["name", "po_double_validation", "po_double_validation_amount"],
+      { limit: 5 },
+    );
+
+    if (companiesWithoutDoubleValidation.length > 0) {
+      issues.push({
+        code: "purchase_double_validation_disabled",
+        category: "functional_config",
+        severity: "info",
+        title: "Doble Aprobación de Compras Desactivada",
+        count: companiesWithoutDoubleValidation.length,
+        items: companiesWithoutDoubleValidation.map((c) => ({ id: c.id, name: c.name })),
+        recommendation:
+          "Considerar activar un umbral de doble validación en compras para órdenes que superen montos críticos.",
+      });
+    }
+  } catch {}
+
+  return issues;
+}
+
 export function formatBusinessAuditReport(findings, clientName) {
   const timestamp = new Date().toLocaleDateString("es-CO", {
     weekday: "long",
@@ -183,8 +291,9 @@ export async function runFullBusinessAudit({
 
   const dataHygieneIssues = await auditDataHygiene(odoo);
   const bottleneckIssues = await auditBottlenecks(odoo);
+  const functionalConfigIssues = await auditFunctionalConfiguration(odoo);
 
-  const allFindings = [...dataHygieneIssues, ...bottleneckIssues];
+  const allFindings = [...dataHygieneIssues, ...bottleneckIssues, ...functionalConfigIssues];
 
   // Calcular severidad global
   let severity = "info";

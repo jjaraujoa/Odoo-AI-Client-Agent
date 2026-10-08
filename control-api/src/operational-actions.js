@@ -190,6 +190,302 @@ export async function validateStockPicking(odoo, { resId }) {
   };
 }
 
+export async function registerInvoicePayment(odoo, {
+  invoiceId,
+  moveId,
+  amount,
+  journalId,
+  paymentDate = null,
+  paymentMethodLineId = null,
+}) {
+  const move = Number(invoiceId || moveId);
+  const payAmount = Number(amount);
+  const journal = Number(journalId);
+  if (!Number.isInteger(move) || move <= 0) {
+    throw new AppError(400, "invalid_move_id", "El ID de la factura (invoiceId/moveId) es requerido y debe ser entero positivo.");
+  }
+  if (isNaN(payAmount) || payAmount <= 0) {
+    throw new AppError(400, "invalid_amount", "El monto del pago debe ser mayor a cero.");
+  }
+  if (!Number.isInteger(journal) || journal <= 0) {
+    throw new AppError(400, "invalid_journal_id", "El ID del diario de banco/caja (journalId) es requerido.");
+  }
+
+  const context = {
+    active_model: "account.move",
+    active_id: move,
+    active_ids: [move],
+    ...DEFAULT_CONTEXT,
+  };
+
+  const values = {
+    amount: payAmount,
+    journal_id: journal,
+    group_payment: true,
+    ...(paymentDate ? { payment_date: String(paymentDate) } : {}),
+    ...(paymentMethodLineId ? { payment_method_line_id: Number(paymentMethodLineId) } : {}),
+  };
+
+  const created = await odoo.create("account.payment.register", values, context);
+  const wizardId = extractRecordId(created);
+
+  await odoo.call("account.payment.register", "action_create_payments", {
+    ids: [wizardId],
+    context,
+  });
+
+  return {
+    success: true,
+    model: "account.move",
+    record_id: move,
+    wizard_id: wizardId,
+    summary: `Pago registrado exitosamente por $${payAmount} para la factura #${move}.`,
+  };
+}
+
+export async function createSaleAdvancePayment(odoo, {
+  saleOrderId,
+  orderId,
+  percentage = null,
+  amount = null,
+  advancePaymentMethod = "percentage",
+}) {
+  const order = Number(saleOrderId || orderId);
+  if (!Number.isInteger(order) || order <= 0) {
+    throw new AppError(400, "invalid_order_id", "El ID del pedido de venta (saleOrderId/orderId) es requerido.");
+  }
+
+  const context = {
+    active_model: "sale.order",
+    active_id: order,
+    active_ids: [order],
+    ...DEFAULT_CONTEXT,
+  };
+
+  const values = {
+    advance_payment_method: advancePaymentMethod,
+  };
+
+  if (advancePaymentMethod === "percentage") {
+    const pct = Number(percentage ?? amount);
+    if (isNaN(pct) || pct <= 0 || pct > 100) {
+      throw new AppError(400, "invalid_percentage", "El porcentaje de anticipo debe ser entre 0.01 y 100.");
+    }
+    values.amount = pct;
+  } else {
+    const fixed = Number(amount ?? percentage);
+    if (isNaN(fixed) || fixed <= 0) {
+      throw new AppError(400, "invalid_amount", "El importe fijo del anticipo debe ser mayor a cero.");
+    }
+    values.fixed_amount = fixed;
+  }
+
+  const created = await odoo.create("sale.advance.payment.inv", values, context);
+  const wizardId = extractRecordId(created);
+
+  await odoo.call("sale.advance.payment.inv", "create_invoices", {
+    ids: [wizardId],
+    context,
+  });
+
+  return {
+    success: true,
+    model: "sale.order",
+    record_id: order,
+    wizard_id: wizardId,
+    summary: `Factura de anticipo creada para la orden #${order}.`,
+  };
+}
+
+export async function createCreditNote(odoo, {
+  moveId,
+  reason = "",
+  date = null,
+  journalId = null,
+}) {
+  const move = Number(moveId);
+  if (!Number.isInteger(move) || move <= 0) {
+    throw new AppError(400, "invalid_move_id", "El ID de la factura (moveId) es requerido.");
+  }
+
+  const context = {
+    active_model: "account.move",
+    active_id: move,
+    active_ids: [move],
+    ...DEFAULT_CONTEXT,
+  };
+
+  const values = {
+    ...(reason ? { reason: String(reason).slice(0, 200) } : {}),
+    ...(date ? { date: String(date) } : {}),
+    ...(journalId ? { journal_id: Number(journalId) } : {}),
+  };
+
+  const created = await odoo.create("account.move.reversal", values, context);
+  const wizardId = extractRecordId(created);
+
+  await odoo.call("account.move.reversal", "reverse_moves", {
+    ids: [wizardId],
+    context,
+  });
+
+  return {
+    success: true,
+    model: "account.move",
+    record_id: move,
+    wizard_id: wizardId,
+    summary: `Nota de crédito rectificativa creada exitosamente para la factura #${move}.`,
+  };
+}
+
+export async function convertCrmLead(odoo, {
+  leadId,
+  action = "create",
+  partnerId = null,
+  userId = null,
+  teamId = null,
+}) {
+  const lead = Number(leadId);
+  if (!Number.isInteger(lead) || lead <= 0) {
+    throw new AppError(400, "invalid_lead_id", "El ID de la iniciativa (leadId) es requerido.");
+  }
+  const partner = partnerId ? Number(partnerId) : null;
+  if (action === "exist" && (!Number.isInteger(partner) || partner <= 0)) {
+    throw new AppError(400, "invalid_partner_id", "El ID del contacto/cliente (partnerId) es requerido cuando action es 'exist'.");
+  }
+
+  const context = {
+    active_model: "crm.lead",
+    active_id: lead,
+    active_ids: [lead],
+    ...DEFAULT_CONTEXT,
+  };
+
+  const values = {
+    name: "convert",
+    action: action,
+    ...(partner ? { partner_id: partner } : {}),
+    force_assignment: true,
+    ...(userId ? { user_id: Number(userId) } : {}),
+    ...(teamId ? { team_id: Number(teamId) } : {}),
+  };
+
+  const created = await odoo.create("crm.lead2opportunity.partner", values, context);
+  const wizardId = extractRecordId(created);
+
+  await odoo.call("crm.lead2opportunity.partner", "action_apply", {
+    ids: [wizardId],
+    context,
+  });
+
+  return {
+    success: true,
+    model: "crm.lead",
+    record_id: lead,
+    wizard_id: wizardId,
+    summary: `Iniciativa #${lead} convertida a oportunidad exitosamente.`,
+  };
+}
+
+export async function markCrmLeadLost(odoo, {
+  leadId,
+  lostReasonId,
+}) {
+  const lead = Number(leadId);
+  const reason = Number(lostReasonId);
+  if (!Number.isInteger(lead) || lead <= 0) {
+    throw new AppError(400, "invalid_lead_id", "El ID de la oportunidad (leadId) es requerido.");
+  }
+  if (!Number.isInteger(reason) || reason <= 0) {
+    throw new AppError(400, "invalid_reason_id", "El ID del motivo de pérdida (lostReasonId) es requerido.");
+  }
+
+  const context = {
+    active_model: "crm.lead",
+    active_id: lead,
+    active_ids: [lead],
+    ...DEFAULT_CONTEXT,
+  };
+
+  const values = {
+    lead_ids: [[6, 0, [lead]]],
+    lost_reason_id: reason,
+  };
+
+  const created = await odoo.create("crm.lead.lost", values, context);
+  const wizardId = extractRecordId(created);
+
+  await odoo.call("crm.lead.lost", "action_lost_reason_apply", {
+    ids: [wizardId],
+    context,
+  });
+
+  return {
+    success: true,
+    model: "crm.lead",
+    record_id: lead,
+    wizard_id: wizardId,
+    summary: `Oportunidad #${lead} marcada como perdida con motivo #${reason}.`,
+  };
+}
+
+export async function cancelSaleOrder(odoo, { resId }) {
+  const id = Number(resId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new AppError(400, "invalid_res_id", "El ID de la orden de venta es inválido.");
+  }
+
+  await odoo.call("sale.order", "action_cancel", {
+    ids: [id],
+    context: DEFAULT_CONTEXT,
+  });
+
+  return {
+    success: true,
+    model: "sale.order",
+    record_id: id,
+    summary: `Orden de venta #${id} cancelada exitosamente.`,
+  };
+}
+
+export async function cancelInvoice(odoo, { resId }) {
+  const id = Number(resId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new AppError(400, "invalid_res_id", "El ID de la factura es inválido.");
+  }
+
+  await odoo.call("account.move", "button_cancel", {
+    ids: [id],
+    context: DEFAULT_CONTEXT,
+  });
+
+  return {
+    success: true,
+    model: "account.move",
+    record_id: id,
+    summary: `Factura o apunte contable #${id} cancelado exitosamente.`,
+  };
+}
+
+export async function cancelStockPicking(odoo, { resId }) {
+  const id = Number(resId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new AppError(400, "invalid_res_id", "El ID del albarán es inválido.");
+  }
+
+  await odoo.call("stock.picking", "action_cancel", {
+    ids: [id],
+    context: DEFAULT_CONTEXT,
+  });
+
+  return {
+    success: true,
+    model: "stock.picking",
+    record_id: id,
+    summary: `Albarán de inventario #${id} cancelado exitosamente.`,
+  };
+}
+
 export const OPERATIONAL_ACTIONS = Object.freeze({
   crear_borrador_orden_venta: createDraftSaleOrder,
   crear_borrador_factura_cliente: createDraftCustomerInvoice,
@@ -197,6 +493,14 @@ export const OPERATIONAL_ACTIONS = Object.freeze({
   cambiar_etapa_registro: changeRecordStage,
   confirmar_orden_venta: confirmSaleOrder,
   validar_albaran_entrega: validateStockPicking,
+  registrar_pago_factura: registerInvoicePayment,
+  crear_anticipo_venta: createSaleAdvancePayment,
+  crear_nota_credito: createCreditNote,
+  convertir_iniciativa_crm: convertCrmLead,
+  perder_oportunidad_crm: markCrmLeadLost,
+  cancelar_orden_venta: cancelSaleOrder,
+  cancelar_factura: cancelInvoice,
+  cancelar_albaran_entrega: cancelStockPicking,
 });
 
 export async function executeOperationalAction(actionName, odoo, params) {
