@@ -30,7 +30,7 @@ test("createDraftSaleOrder valida parámetros y genera orden borrador en Odoo", 
   assert.equal(calls.length, 1);
   assert.equal(calls[0].model, "sale.order");
   assert.equal(calls[0].values.partner_id, 42);
-  assert.equal(calls[0].values.state, "draft");
+  assert.equal(calls[0].values.state, undefined);
   assert.equal(calls[0].values.note, "Entrega urgente");
   assert.deepEqual(calls[0].values.order_line, [[0, 0, {
     product_id: 10,
@@ -48,6 +48,38 @@ test("createDraftSaleOrder valida parámetros y genera orden borrador en Odoo", 
     () => createDraftSaleOrder(mockOdoo, { partnerId: 42, orderLines: [] }),
     { code: "empty_order_lines" },
   );
+});
+
+test("createDraftSaleOrder omite price_unit y name cuando no vienen explícitos y los incluye cuando sí vienen", async () => {
+  const calls = [];
+  const mockOdoo = {
+    async create(model, values, context) {
+      calls.push({ model, values, context });
+      return [{ id: 802 }];
+    },
+  };
+
+  // Línea sin priceUnit ni name
+  await createDraftSaleOrder(mockOdoo, {
+    partnerId: 42,
+    orderLines: [{ productId: 10, quantity: 2 }],
+  });
+  assert.deepEqual(calls[0].values.order_line, [[0, 0, {
+    product_id: 10,
+    product_uom_qty: 2,
+  }]]);
+  assert.equal(calls[0].values.state, undefined);
+
+  // Línea con priceUnit 15000
+  await createDraftSaleOrder(mockOdoo, {
+    partnerId: 42,
+    orderLines: [{ productId: 10, quantity: 2, priceUnit: 15000 }],
+  });
+  assert.deepEqual(calls[1].values.order_line, [[0, 0, {
+    product_id: 10,
+    product_uom_qty: 2,
+    price_unit: 15000,
+  }]]);
 });
 
 test("createDraftCustomerInvoice crea factura borrador tipo out_invoice", async () => {
@@ -72,6 +104,44 @@ test("createDraftCustomerInvoice crea factura borrador tipo out_invoice", async 
   assert.equal(calls[0].values.move_type, "out_invoice");
   assert.equal(calls[0].values.partner_id, 15);
   assert.equal(calls[0].values.ref, "REF-001");
+  assert.equal(calls[0].values.state, undefined);
+  assert.deepEqual(calls[0].values.invoice_line_ids, [[0, 0, {
+    product_id: 5,
+    quantity: 1,
+    price_unit: 80000,
+  }]]);
+});
+
+test("createDraftCustomerInvoice omite price_unit y name cuando no vienen explícitos y los incluye cuando sí vienen", async () => {
+  const calls = [];
+  const mockOdoo = {
+    async create(model, values, context) {
+      calls.push({ model, values, context });
+      return [{ id: 903 }];
+    },
+  };
+
+  // Línea sin priceUnit ni name
+  await createDraftCustomerInvoice(mockOdoo, {
+    partnerId: 15,
+    invoiceLines: [{ productId: 5, quantity: 3 }],
+  });
+  assert.deepEqual(calls[0].values.invoice_line_ids, [[0, 0, {
+    product_id: 5,
+    quantity: 3,
+  }]]);
+  assert.equal(calls[0].values.state, undefined);
+
+  // Línea con priceUnit 15000
+  await createDraftCustomerInvoice(mockOdoo, {
+    partnerId: 15,
+    invoiceLines: [{ productId: 5, quantity: 3, priceUnit: 15000 }],
+  });
+  assert.deepEqual(calls[1].values.invoice_line_ids, [[0, 0, {
+    product_id: 5,
+    quantity: 3,
+    price_unit: 15000,
+  }]]);
 });
 
 test("assignResponsibleUser reasigna usuario en modelos soportados", async () => {

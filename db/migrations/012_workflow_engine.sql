@@ -1,4 +1,7 @@
 -- Migración 012: Motor de flujos de trabajo declarativos (Workflow DSL & Executions)
+-- Corrección (issue #6): el registro original usaba una columna inexistente y la migración nunca quedaba aplicada; es seguro re-ejecutarla.
+
+BEGIN;
 
 CREATE TABLE IF NOT EXISTS agent.workflow_definitions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -40,6 +43,8 @@ CREATE INDEX IF NOT EXISTS idx_workflow_executions_client
 CREATE INDEX IF NOT EXISTS idx_workflow_executions_status
     ON agent.workflow_executions (client_id, status);
 
-INSERT INTO agent.schema_migrations (version, description)
-VALUES ('012', 'Definiciones de flujos de trabajo declarativos y auditoría de ejecuciones')
+INSERT INTO agent.schema_migrations(version)
+VALUES ('012_workflow_engine')
 ON CONFLICT (version) DO NOTHING;
+
+COMMIT;

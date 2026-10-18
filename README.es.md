@@ -119,6 +119,8 @@ Conecta Odoo 19 directamente con tu entorno de desarrollo o asistente de escrito
 - Herramientas operativas: `crear_orden_venta_borrador`, `confirmar_orden_venta`, `reasignar_responsable`.
 - Procedimientos SOP y Auditorías de Negocio.
 
+> **Nota**: En modo carpeta local (sin `DATABASE_URL`), solo se publican herramientas de consulta; las acciones de escritura requieren el modo BD con la base de datos de control.
+
 ### 5. Auditorías de Higiene de Datos y Detección de Cuellos de Botella
 Audita la base de datos de Odoo automáticamente y genera reportes de salud empresarial:
 - **Higiene**: Clientes sin identificación fiscal (NIT/RUT), productos sin coste o existencias negativas.
