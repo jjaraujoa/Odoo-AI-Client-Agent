@@ -1,7 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseWorkflowYaml, evaluateCondition } from "./workflow-parser.js";
-import { requestOrExecuteAction } from "./governance.js";
+import { requestOrExecuteAction, findSupervisorApprover } from "./governance.js";
 
 /**
  * Carga flujos de trabajo desde el sistema de archivos local (clients/<slug>/workflows/)
@@ -158,6 +158,7 @@ export async function processEventThroughWorkflows({
     let flowStatus = "completed";
     let pendingActionId = null;
     let errorMessage = null;
+    const approver = await findSupervisorApprover(db, client);
 
     for (const step of workflow.actions) {
       const actionName = mapDslActionToToolName(step.action);
@@ -176,6 +177,8 @@ export async function processEventThroughWorkflows({
           actionName,
           params,
           odoo,
+          approvalChannel: approver ? "workflow" : null,
+          approver,
         });
 
         stepResults.push({

@@ -94,7 +94,12 @@ Queries are translated into bounded, declarative execution plans.
 Every write action adheres to a deterministic governance matrix:
 - **Tier 1 (Autonomous)**: Create draft quotations, reassign sales representatives, update internal notes.
 - **Tier 2 (Supervised / Notified)**: Advance CRM stages or alter order lines; automatically notifies the team lead via Telegram.
-- **Tier 3 (Critical / Human-in-the-Loop)**: Confirm sale orders or validate warehouse pickings; generates a secure 6-digit confirmation code with a 15-minute expiration window.
+- **Tier 3 (Critical / Human-in-the-Loop)**: Confirm sale orders or validate warehouse pickings. The AI can **never** approve these itself: the person is asked in the same channel they use to talk to the agent.
+  - **Coding agents (MCP: Claude Code, Cursor, etc.)**: native client prompt (*MCP elicitation*) with Confirm / Cancel / Modify. If the client lacks elicitation support, the request is sent via Telegram to the user given with `--user`; otherwise the action is rejected.
+  - **Telegram**: native inline buttons ✅ Confirm · ❌ Cancel · ✏️ Modify.
+  - **Batches**: several records sent in one request (`resIds`, max 50) are approved with a single summary and a single confirmation.
+  - Requests expire after 5 minutes, can be decided only once, and every record is re-read before execution: if it changed in Odoo since the summary was shown, it is skipped.
+  - Known limit: a coding agent with shell access can read secrets from the local `.env`. Approval protects the MCP channel, not files on disk.
 
 ### 3. 📑 Declarative Business Workflows (DSL YAML)
 Define business workflows that run deterministically in sub-milliseconds:

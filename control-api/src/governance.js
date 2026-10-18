@@ -1,9 +1,12 @@
-import { randomInt, randomUUID } from "node:crypto";
 import { AppError } from "./errors.js";
 import { executeOperationalAction } from "./operational-actions.js";
 import { requireToolPolicy } from "./tools.js";
 import { buildOdooDeepLink, dispatchNotification, formatEventNotificationText } from "./notifications.js";
 import { decryptNamedSecret } from "./crypto.js";
+import { createApprovalRequest, decideApproval } from "./approvals.js";
+import { sendApprovalToTelegram } from "./approval-telegram.js";
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function requestOrExecuteAction({
   db,
@@ -14,13 +17,16 @@ export async function requestOrExecuteAction({
   params,
   odoo,
   telegramChatId = null,
+  approvalChannel = null,
+  approver = null,
 }) {
   // 1. Validar política de la herramienta en el cliente
   const policy = await requireToolPolicy(db, client.id, actionName);
   const riskLevel = Number(policy.risk_level || 1);
   const confirmationRequired = Boolean(policy.confirmation_required);
-  const env = String(client.settings?.environment || client.environment || "production").toLowerCase();
-  const isStaging = env === "staging" || env === "test";
+  const env = String(client.settings?.environment || "production").toLowerCase();
+  const isUuid = typeof client?.id === "string" && UUID_REGEX.test(client.id);
+  const isStaging = isUuid && (env === "staging" || env === "test");
 
   // En staging: Las acciones de Nivel 3 o con confirmación obligatoria se auto-aprueban
   // para agilizar pruebas de integración y desarrollo sin bloquear al usuario
@@ -159,116 +165,125 @@ export async function requestOrExecuteAction({
   }
 
   // Nivel 3: Aprobación obligatoria interactiva (Human-in-the-Loop)
-  const confirmationCode = String(randomInt(100000, 999999));
-  const idempotencyKey = randomUUID();
-  const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutos de caducidad
+  if (!approvalChannel) {
+    throw new AppError(
+      409,
+      "approval_channel_unavailable",
+      "Esta acción requiere aprobación humana y no hay un canal de aprobación disponible (Telegram vinculado o cliente MCP con soporte de preguntas).",
+    );
+  }
 
-  const insertPending = await db.query(
-    `INSERT INTO agent.pending_actions
-       (client_id, linked_user_id, telegram_chat_id, action_type, status, preview, idempotency_key, confirmation_code, expires_at)
-     VALUES ($1, $2, $3, 'operational_action', 'pending', $4, $5, $6, $7)
-     RETURNING id`,
-    [
-      client.id,
-      linkedUser?.id || null,
-      telegramChatId || client.settings?.alert_chat_id || 0,
-      JSON.stringify({ actionName, params, summary: `Confirmación requerida para ${actionName}` }),
-      idempotencyKey,
-      confirmationCode,
-      expiresAt.toISOString(),
-    ],
-  );
+  if (approvalChannel === "telegram" || approvalChannel === "workflow") {
+    if (!approver?.id || !approver?.telegram_chat_id) {
+      throw new AppError(
+        409,
+        "approval_channel_unavailable",
+        "Esta acción requiere aprobación humana y no hay un canal de aprobación disponible (Telegram vinculado o cliente MCP con soporte de preguntas).",
+      );
+    }
+  }
 
-  const actionId = insertPending.rows[0].id;
+  const request = await createApprovalRequest({
+    db,
+    odoo,
+    client,
+    linkedUser,
+    approverLinkedUserId: approver?.id ?? null,
+    actionName,
+    params,
+    channel: approvalChannel,
+    telegramChatId: approver?.telegram_chat_id ?? telegramChatId ?? null,
+  });
 
-  await db.query(
-    `INSERT INTO agent.action_executions
-       (client_id, linked_user_id, action_name, model, res_id, risk_level, status, input_params, result_data)
-     VALUES ($1, $2, $3, $4, $5, $6, 'awaiting_approval', $7, $8)`,
-    [
-      client.id,
-      linkedUser?.id || null,
-      actionName,
-      params.model || "unknown",
-      params.resId ? Number(params.resId) : null,
-      3,
-      JSON.stringify(params),
-      JSON.stringify({ action_id: actionId, confirmation_code: confirmationCode }),
-    ],
-  );
+  if (approvalChannel === "telegram" || approvalChannel === "workflow") {
+    try {
+      await sendApprovalToTelegram({
+        db,
+        config,
+        clientId: client.id,
+        chatId: approver.telegram_chat_id,
+        actionId: request.actionId,
+        summaryText: request.summaryText,
+      });
+    } catch (err) {
+      // Si nadie recibió la solicitud, no debe quedar pendiente de aprobación.
+      await db.query(
+        `UPDATE agent.pending_actions
+            SET status = 'cancelled', decision_note = 'telegram_delivery_failed'
+          WHERE id = $1 AND client_id = $2 AND status = 'pending'`,
+        [request.actionId, client.id],
+      );
+      throw err;
+    }
+  }
+
+  let messageText;
+  if (approvalChannel === "telegram" || approvalChannel === "workflow") {
+    messageText = "Se envió la solicitud de aprobación por Telegram. La acción se ejecutará solo cuando la persona la confirme.";
+  } else if (approvalChannel === "admin") {
+    messageText = "Pendiente de aprobación por un administrador.";
+  } else if (approvalChannel === "mcp_elicitation") {
+    messageText = "Pendiente de aprobación del usuario.";
+  } else {
+    messageText = "Pendiente de aprobación.";
+  }
 
   return {
     status: "awaiting_approval",
     risk_level: 3,
-    action_id: actionId,
-    confirmation_code: confirmationCode,
-    expires_at: expiresAt.toISOString(),
-    message: `Acción crítica requiere aprobación. Código: ${confirmationCode} (Expira en 5 min).`,
+    action_id: request.actionId,
+    channel: approvalChannel,
+    expires_at: request.expiresAt,
+    summary: request.summaryText,
+    items: request.items.map((i) => ({ resId: i.resId, display: i.display })),
+    excluded: request.excluded,
+    message: messageText,
   };
 }
 
 export async function confirmOperationalAction({
   db,
   odoo,
+  clientId,
   actionId,
-  confirmationCode,
+  decision = "confirm",
   confirmedByUserId = null,
+  via = "admin",
+  note = null,
 }) {
-  const pendingRes = await db.query(
-    `SELECT * FROM agent.pending_actions
-      WHERE id = $1 AND status = 'pending'`,
-    [actionId],
+  return decideApproval({
+    db,
+    odoo,
+    clientId,
+    actionId,
+    decision,
+    deciderLinkedUserId: confirmedByUserId,
+    via,
+    note,
+  });
+}
+
+export async function findSupervisorApprover(db, client) {
+  const supervisorChatId = client?.settings?.supervisor_chat_id || client?.settings?.alert_chat_id;
+  if (!supervisorChatId) {
+    return null;
+  }
+
+  const res = await db.query(
+    `SELECT id, telegram_chat_id, telegram_user_id
+       FROM agent.linked_users
+      WHERE client_id = $1 AND active AND (telegram_chat_id = $2 OR telegram_user_id = $2)
+      LIMIT 1`,
+    [client.id, supervisorChatId],
   );
-  const action = pendingRes.rows[0];
-  if (!action) {
-    throw new AppError(404, "action_not_found", "La solicitud de acción no existe o ya no está pendiente.");
-  }
 
-  if (new Date() > new Date(action.expires_at)) {
-    await db.query("UPDATE agent.pending_actions SET status = 'expired' WHERE id = $1", [actionId]);
-    throw new AppError(410, "action_expired", "La solicitud de confirmación ha expirado.");
-  }
-
-  if (action.confirmation_code !== String(confirmationCode).trim()) {
-    throw new AppError(400, "invalid_confirmation_code", "Código de confirmación incorrecto.");
-  }
-
-  const { actionName, params } = action.preview;
-  let result;
-  try {
-    result = await executeOperationalAction(actionName, odoo, params);
-    await db.query(
-      `UPDATE agent.pending_actions
-          SET status = 'completed', completed_at = now(), result = $2
-        WHERE id = $1`,
-      [actionId, JSON.stringify(result)],
-    );
-    await db.query(
-      `INSERT INTO agent.action_executions
-         (client_id, linked_user_id, action_name, model, res_id, risk_level, status, input_params, result_data)
-       VALUES ($1, $2, $3, $4, $5, 3, 'approved', $6, $7)`,
-      [
-        action.client_id,
-        confirmedByUserId,
-        actionName,
-        result.model || "unknown",
-        result.record_id || null,
-        JSON.stringify(params),
-        JSON.stringify(result),
-      ],
-    );
-  } catch (err) {
-    await db.query(
-      `UPDATE agent.pending_actions
-          SET status = 'failed', error_code = $2, result = $3
-        WHERE id = $1`,
-      [actionId, err.code || "execution_error", JSON.stringify({ message: err.message })],
-    );
-    throw err;
+  const row = res?.rows?.[0];
+  if (!row) {
+    return null;
   }
 
   return {
-    status: "completed",
-    result,
+    id: row.id,
+    telegram_chat_id: row.telegram_chat_id ?? row.telegram_user_id,
   };
 }

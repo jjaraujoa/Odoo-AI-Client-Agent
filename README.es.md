@@ -94,7 +94,12 @@ flowchart TD
 Toda acción de escritura respeta una matriz de gobernanza estricta:
 - **Nivel 1 (Autónoma)**: Crear borradores de cotizaciones, reasignar responsables o actualizar notas internas.
 - **Nivel 2 (Asistida / Notificada)**: Cambiar etapas en CRM o modificar líneas de pedido; se ejecuta y notifica automáticamente al supervisor vía Telegram.
-- **Nivel 3 (Crítica / Aprobación Humana)**: Confirmar pedidos de venta o validar albaranes de entrega; genera un código de un solo uso con ventana de 15 minutos para aprobación interactiva.
+- **Nivel 3 (Crítica / Aprobación Humana)**: Confirmar pedidos de venta o validar albaranes de entrega. La IA **nunca** puede aprobarla: se le pregunta a la persona en el mismo canal donde conversa con el agente.
+  - **Agentes de código (MCP: Claude Code, Cursor, etc.)**: pregunta nativa del cliente (*MCP elicitation*) con las opciones Confirmar / Cancelar / Modificar. Si el cliente no la soporta, la solicitud llega por Telegram al usuario indicado con `--user`; si tampoco hay Telegram, la acción se rechaza.
+  - **Telegram**: botones nativos ✅ Confirmar · ❌ Cancelar · ✏️ Modificar.
+  - **Lotes**: varios registros enviados en una sola solicitud (`resIds`, máximo 50) se aprueban con un único resumen y una única confirmación.
+  - Cada solicitud vence en 5 minutos, se decide una sola vez y antes de ejecutar se vuelve a leer cada registro: si cambió en Odoo desde que se mostró el resumen, se omite.
+  - Límite conocido: un agente de código con acceso a la terminal puede leer los secretos del `.env` local. La aprobación protege el canal MCP, no los archivos del equipo; no dejes credenciales con más permisos de los necesarios en carpetas a las que el agente tenga acceso.
 
 ### 3. Motor de Flujos de Negocio Declarativos (DSL YAML)
 Permite definir recetas automatizadas de negocio sin gastar tokens de LLM:
