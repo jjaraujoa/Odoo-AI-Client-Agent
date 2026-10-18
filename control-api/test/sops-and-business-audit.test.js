@@ -130,6 +130,9 @@ test("upsertSop inserta o actualiza un procedimiento en base de datos", async ()
 test("auditDataHygiene detecta clientes sin NIT, productos sin costo e inventario negativo", async () => {
   const mockOdoo = {
     async searchRead(model, domain, fields) {
+      if (model === "account.move") {
+        return [{ partner_id: [101, "Cliente Sin NIT"] }];
+      }
       if (model === "res.partner") {
         return [
           { id: 101, name: "Cliente Sin NIT", email: "contacto@sin-nit.com" },
@@ -158,6 +161,60 @@ test("auditDataHygiene detecta clientes sin NIT, productos sin costo e inventari
   assert.ok(codes.includes("abandoned_quotations"));
 });
 
+test("auditDataHygiene sin facturas no genera hallazgo de NIT", async () => {
+  const mockOdoo = {
+    async searchRead(model) {
+      if (model === "account.move") return [];
+      if (model === "res.partner") return [{ id: 101, name: "Cliente Sin Facturas" }];
+      return [];
+    },
+  };
+
+  const issues = await auditDataHygiene(mockOdoo);
+  const vatIssue = issues.find((i) => i.code === "partners_missing_vat");
+  assert.equal(vatIssue, undefined);
+});
+
+test("auditDataHygiene partner excluido por id no aparece", async () => {
+  let partnerDomainCaptured = null;
+  const mockOdoo = {
+    async searchRead(model, domain) {
+      if (model === "account.move") return [{ partner_id: [101, "Consumidor Final"] }];
+      if (model === "res.partner") {
+        partnerDomainCaptured = domain;
+        return [];
+      }
+      return [];
+    },
+  };
+
+  const issues = await auditDataHygiene(mockOdoo, { vatExemptPartnerIds: [101] });
+  assert.ok(partnerDomainCaptured);
+  const idFilter = partnerDomainCaptured.find((d) => Array.isArray(d) && d[0] === "id" && d[1] === "not in");
+  assert.deepEqual(idFilter, ["id", "not in", [101]]);
+  const vatIssue = issues.find((i) => i.code === "partners_missing_vat");
+  assert.equal(vatIssue, undefined);
+});
+
+test("auditDataHygiene el dominio incluye category_id not in cuando se configuran categorías", async () => {
+  let partnerDomainCaptured = null;
+  const mockOdoo = {
+    async searchRead(model, domain) {
+      if (model === "account.move") return [{ partner_id: [102, "Cliente Consumidor"] }];
+      if (model === "res.partner") {
+        partnerDomainCaptured = domain;
+        return [];
+      }
+      return [];
+    },
+  };
+
+  await auditDataHygiene(mockOdoo, { vatExemptCategoryIds: [3, 7] });
+  assert.ok(partnerDomainCaptured);
+  const categoryFilter = partnerDomainCaptured.find((d) => Array.isArray(d) && d[0] === "category_id");
+  assert.deepEqual(categoryFilter, ["category_id", "not in", [3, 7]]);
+});
+
 test("auditBottlenecks detecta órdenes confirmadas sin facturar y albaranes retrasados", async () => {
   const mockOdoo = {
     async searchRead(model) {
@@ -181,6 +238,7 @@ test("auditBottlenecks detecta órdenes confirmadas sin facturar y albaranes ret
 test("runFullBusinessAudit calcula severidad global y persiste reporte en db", async () => {
   const mockOdoo = {
     async searchRead(model) {
+      if (model === "account.move") return [{ partner_id: [101, "Empresa X"] }];
       if (model === "res.partner") return [{ id: 101, name: "Empresa X" }];
       return [];
     },

@@ -1,24 +1,72 @@
-export async function auditDataHygiene(odoo) {
+export async function auditDataHygiene(odoo, options = {}) {
+  const {
+    vatExemptPartnerIds = [],
+    vatExemptCategoryIds = [],
+    invoicedWithinMonths = 12,
+  } = options;
+
   const issues = [];
 
   // 1. Clientes sin identificación fiscal
   try {
-    const noVatPartners = await odoo.searchRead(
-      "res.partner",
-      [["customer_rank", ">", 0], "|", ["vat", "=", false], ["vat", "=", ""]],
-      ["name", "email", "phone"],
-      { limit: 10 },
+    const d = new Date();
+    d.setMonth(d.getMonth() - invoicedWithinMonths);
+    const dateThreshold = d.toISOString().slice(0, 10);
+
+    const moves = await odoo.searchRead(
+      "account.move",
+      [
+        ["move_type", "in", ["out_invoice", "out_refund"]],
+        ["state", "=", "posted"],
+        ["invoice_date", ">=", dateThreshold],
+      ],
+      ["partner_id"],
+      { limit: 2000 },
     );
-    if (noVatPartners.length > 0) {
-      issues.push({
-        code: "partners_missing_vat",
-        category: "data_hygiene",
-        severity: "warning",
-        title: "Clientes sin Identificación Fiscal (NIT/RUT)",
-        count: noVatPartners.length,
-        items: noVatPartners.map((p) => ({ id: p.id, name: p.name })),
-        recommendation: "Completar la identificación fiscal de estos clientes para evitar rechazos en facturación electrónica.",
-      });
+
+    const ids = [
+      ...new Set(
+        (moves || [])
+          .map((m) => (Array.isArray(m.partner_id) ? m.partner_id[0] : m.partner_id))
+          .filter((id) => typeof id === "number" && id > 0),
+      ),
+    ];
+
+    if (ids.length > 0) {
+      const partnerDomain = [
+        ["id", "in", ids],
+        "|",
+        ["vat", "=", false],
+        ["vat", "=", ""],
+      ];
+
+      if (Array.isArray(vatExemptPartnerIds) && vatExemptPartnerIds.length > 0) {
+        partnerDomain.push(["id", "not in", vatExemptPartnerIds]);
+      }
+
+      if (Array.isArray(vatExemptCategoryIds) && vatExemptCategoryIds.length > 0) {
+        partnerDomain.push(["category_id", "not in", vatExemptCategoryIds]);
+      }
+
+      const noVatPartners = await odoo.searchRead(
+        "res.partner",
+        partnerDomain,
+        ["name", "email", "phone"],
+        { limit: 10 },
+      );
+
+      if (noVatPartners.length > 0) {
+        issues.push({
+          code: "partners_missing_vat",
+          category: "data_hygiene",
+          severity: "warning",
+          title: "Clientes sin Identificación Fiscal (NIT/RUT)",
+          count: noVatPartners.length,
+          items: noVatPartners.map((p) => ({ id: p.id, name: p.name })),
+          recommendation:
+            "Completar la identificación fiscal de los clientes facturados que la requieran. Los consumidores finales pueden excluirse con settings.audit.vat_exempt_partner_ids o vat_exempt_category_ids.",
+        });
+      }
     }
   } catch {
     // Tolerancia ante modelos o campos no disponibles en ciertas versiones
@@ -289,7 +337,12 @@ export async function runFullBusinessAudit({
   const cName = client?.name || "la empresa";
   const cSlug = client?.slug || "empresa";
 
-  const dataHygieneIssues = await auditDataHygiene(odoo);
+  const audit = client?.settings?.audit || {};
+  const dataHygieneIssues = await auditDataHygiene(odoo, {
+    vatExemptPartnerIds: audit.vat_exempt_partner_ids || [],
+    vatExemptCategoryIds: audit.vat_exempt_category_ids || [],
+    invoicedWithinMonths: audit.vat_invoiced_within_months || 12,
+  });
   const bottleneckIssues = await auditBottlenecks(odoo);
   const functionalConfigIssues = await auditFunctionalConfiguration(odoo);
 
