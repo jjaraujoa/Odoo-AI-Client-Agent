@@ -18,6 +18,11 @@ import { audit, textSummary } from "./audit.js";
 import { handleSemanticRead, planSemanticReadShadow } from "./read-agent.js";
 import { readPlannerMode } from "./semantic-catalog.js";
 import { answerSopQuery } from "./sops.js";
+import {
+  isApprovalCallback,
+  processApprovalCallback,
+} from "./approval-telegram.js";
+import { handleWriteRequest } from "./write-intent.js";
 
 function extractUpdate(update) {
   const callback = update.callback_query;
@@ -108,20 +113,24 @@ export async function deliverTelegramMessage(
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      await request(
+      const payload = {
+        chat_id: reply.chat_id,
+        text: reply.text,
+        protect_content: reply.protect_content !== false,
+      };
+      if (reply.reply_markup !== undefined) {
+        payload.reply_markup = reply.reply_markup;
+      }
+      const response = await request(
         `https://api.telegram.org/bot${botToken}/sendMessage`,
         {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            chat_id: reply.chat_id,
-            text: reply.text,
-            protect_content: reply.protect_content !== false,
-          }),
+          body: JSON.stringify(payload),
         },
         15_000,
       );
-      return;
+      return response?.result ?? null;
     } catch (error) {
       lastError = error;
       if (attempt === attempts || !shouldRetryDelivery(error)) throw error;
@@ -142,6 +151,12 @@ function helpText() {
     "• comparaciones, conteos y cálculos seguros sobre esas entidades",
     "• facturas de proveedor PDF/JPG/PNG para crear un borrador",
     "",
+    "Acciones (con aprobación por botones):",
+    "• confirmar o cancelar órdenes de venta",
+    "• validar o cancelar albaranes",
+    "• cancelar facturas en borrador",
+    "Puedes pedir varias a la vez: se aprueban con un solo resumen.",
+    "",
     "Comandos:",
     "/model — ver modelos disponibles",
     "/model automático — selección automática",
@@ -151,6 +166,8 @@ function helpText() {
     "/confirmar <código> — crear el borrador pendiente",
     "/cancelar — descartar el borrador pendiente",
     "/sop <consulta> — consultar procedimientos operativos y políticas (SOPs)",
+    "",
+    "Las acciones críticas se aprueban con los botones ✅ Confirmar / ❌ Cancelar / ✏️ Modificar.",
   ].join("\n");
 }
 
@@ -197,21 +214,48 @@ export class TelegramProcessor {
         timeoutMs: Number(limits.request_timeout_seconds) * 1000,
       });
 
-      const command = commandParts(parsed.text);
       let outcome;
-      if (command) {
-        outcome = await this.#handleCommand({
-          parsed, identity, session, limits, odoo, command,
-          telegramBotToken: channel.botToken,
+      if (isApprovalCallback(parsed)) {
+        outcome = await processApprovalCallback({
+          db: this.db,
+          odoo,
+          identity,
+          parsed,
+          botToken: channel.botToken,
+          session,
+          deps: {
+            remember: (role, kind, content) =>
+              addMemory(this.db, identity, session, role, kind, content),
+          },
         });
       } else {
-        const fileDescriptor = extractFile(parsed);
-        outcome = fileDescriptor
-          ? await this.#handleInvoice({
-            parsed, identity, session, limits, odoo, fileDescriptor,
+        let command = null;
+        if (parsed.callbackId) {
+          const confirmMatch = /^vb:c:(\d{6})$/.exec(parsed.text);
+          if (confirmMatch) {
+            command = { command: "/confirmar", argument: confirmMatch[1] };
+          } else if (/^vb:x$/.test(parsed.text)) {
+            command = { command: "/cancelar", argument: "" };
+          }
+        }
+        if (!command) {
+          command = commandParts(parsed.text);
+        }
+
+        if (command) {
+          outcome = await this.#handleCommand({
+            parsed, identity, session, limits, odoo, command,
             telegramBotToken: channel.botToken,
-          })
-          : await this.#handleText({ parsed, identity, session, limits, odoo });
+          });
+        } else {
+          const fileDescriptor = extractFile(parsed);
+          outcome = fileDescriptor
+            ? await this.#handleInvoice({
+              parsed, identity, session, limits, odoo, fileDescriptor,
+              telegramBotToken: channel.botToken,
+            })
+            : await this.#handleText({ parsed, identity, session, limits, odoo });
+        }
       }
       outcome.text = truncate(outcome.text, limits.max_output_chars);
       await audit(this.db, {
@@ -238,6 +282,7 @@ export class TelegramProcessor {
         text: outcome.text,
         protect_content: true,
         callback_query_id: parsed.callbackId,
+        ...(outcome.replyMarkup ? { reply_markup: outcome.replyMarkup } : {}),
       };
       await this.#deliver(channel.botToken, reply);
       return { delivered: true, chat_id: parsed.chatId };
@@ -392,6 +437,21 @@ export class TelegramProcessor {
     if (!parsed.text) throw new AppError(400, "empty_message", "Envía una consulta o una factura.");
     const memory = await getRecentMemory(this.db, session, Number(limits.max_context_messages));
     await addMemory(this.db, identity, session, "user", "message", { text: parsed.text });
+    const write = await handleWriteRequest({
+      db: this.db,
+      config: this.config,
+      providers: this.providers,
+      identity,
+      session,
+      odoo,
+      text: parsed.text,
+      memory,
+      chatId: parsed.chatId,
+    });
+    if (write) {
+      await addMemory(this.db, identity, session, "assistant", "message", { text: write.text });
+      return write;
+    }
     const plannerMode = readPlannerMode(identity);
     if (plannerMode === "active") {
       const semantic = await handleSemanticRead({
@@ -544,7 +604,7 @@ export class TelegramProcessor {
       text: result.text,
     });
     file.data.fill(0);
-    return {
+    const outcome = {
       text: result.text,
       eventType: result.status === "pending" ? "vendor_bill_preview" : "vendor_bill_blocked",
       outcome: result.status === "pending" ? "pending" : "denied",
@@ -552,5 +612,16 @@ export class TelegramProcessor {
       model: result.model,
       usage: result.usage,
     };
+    if (result.status === "pending") {
+      outcome.replyMarkup = {
+        inline_keyboard: [
+          [
+            { text: "✅ Confirmar", callback_data: `vb:c:${result.confirmationCode}` },
+            { text: "❌ Cancelar", callback_data: "vb:x" },
+          ],
+        ],
+      };
+    }
+    return outcome;
   }
 }

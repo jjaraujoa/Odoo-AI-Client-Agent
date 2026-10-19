@@ -218,7 +218,7 @@ test("requestOrExecuteAction respeta la matriz de gobernanza de 3 niveles", asyn
       }
       if (sql.includes("INSERT INTO agent.pending_actions")) {
         pendingActions.push(params);
-        return { rows: [{ id: "pending-1" }] };
+        return { rows: [{ id: "b0000000-0000-4000-8000-000000000001" }] };
       }
       if (sql.includes("FROM agent.channel_credentials")) {
         return { rows: [] };
@@ -231,10 +231,13 @@ test("requestOrExecuteAction respeta la matriz de gobernanza de 3 niveles", asyn
     async create() { return [{ id: 101 }]; },
     async write() { return true; },
     async call() { return true; },
+    async searchRead() {
+      return [{ id: 101, name: "SO-101", state: "draft", amount_total: 1000, partner_id: [1, "Cliente A"], write_date: "2026-10-18" }];
+    },
   };
 
   const client = {
-    id: "client-uuid",
+    id: "a0000000-0000-4000-8000-000000000001",
     odoo_base_url: "https://odoo.local",
     settings: {},
   };
@@ -273,66 +276,83 @@ test("requestOrExecuteAction respeta la matriz de gobernanza de 3 niveles", asyn
     actionName: "confirmar_orden_venta",
     params: { resId: 101 },
     odoo: mockOdoo,
+    approvalChannel: "admin",
   });
   assert.equal(l3Res.status, "awaiting_approval");
   assert.equal(l3Res.risk_level, 3);
-  assert.equal(typeof l3Res.confirmation_code, "string");
-  assert.equal(l3Res.confirmation_code.length, 6);
+  assert.equal(l3Res.action_id, "b0000000-0000-4000-8000-000000000001");
+  assert.equal(l3Res.confirmation_code, undefined);
   assert.equal(pendingActions.length, 1);
+  assert.equal(l3Res.message, "Pendiente de aprobación por un administrador.");
 });
 
-test("confirmOperationalAction valida código y ejecuta acción pendiente", async () => {
+test("confirmOperationalAction valida y ejecuta acción pendiente vía decideApproval", async () => {
   const calls = [];
   const mockOdoo = {
     async call(model, method, body) {
       calls.push({ model, method, body });
       return true;
     },
+    async searchRead() {
+      return [{ id: 77, name: "SO-077", state: "draft", amount_total: 50000, write_date: "2026-10-18" }];
+    },
   };
 
   const actionRecord = {
-    id: "action-123",
-    client_id: "client-1",
-    status: "pending",
-    confirmation_code: "123456",
+    id: "c0000000-0000-4000-8000-000000000077",
+    client_id: "a0000000-0000-4000-8000-000000000001",
+    status: "executing",
     expires_at: new Date(Date.now() + 60000).toISOString(),
-    preview: {
+    preview: JSON.stringify({
       actionName: "confirmar_orden_venta",
-      params: { resId: 77 },
-    },
+    }),
+    items: JSON.stringify([
+      {
+        resId: 77,
+        fingerprint: { state: "draft", amount_total: 50000, write_date: "2026-10-18" },
+        params: {},
+      },
+    ]),
   };
 
   const mockDb = {
     async query(sql, params) {
-      if (sql.includes("FROM agent.pending_actions")) {
+      if (sql.includes("UPDATE agent.pending_actions") && sql.includes("status = 'executing'")) {
         return { rows: [actionRecord] };
+      }
+      if (sql.includes("UPDATE agent.pending_actions") && sql.includes("status = $2")) {
+        return { rows: [{ ...actionRecord, status: params[1] }] };
+      }
+      if (sql.includes("INSERT INTO agent.action_executions")) {
+        return { rows: [{ id: "exec-2" }] };
       }
       return { rows: [] };
     },
   };
 
-  // Error con código incorrecto
+  // Error con decisión inválida
   await assert.rejects(
     () => confirmOperationalAction({
       db: mockDb,
       odoo: mockOdoo,
-      actionId: "action-123",
-      confirmationCode: "999999",
+      clientId: "a0000000-0000-4000-8000-000000000001",
+      actionId: "c0000000-0000-4000-8000-000000000077",
+      decision: "invalid_choice",
     }),
-    { code: "invalid_confirmation_code" },
+    { code: "invalid_decision" },
   );
 
   // Confirmación exitosa
   const confirmed = await confirmOperationalAction({
     db: mockDb,
     odoo: mockOdoo,
-    actionId: "action-123",
-    confirmationCode: "123456",
+    clientId: "a0000000-0000-4000-8000-000000000001",
+    actionId: "c0000000-0000-4000-8000-000000000077",
+    decision: "confirm",
     confirmedByUserId: "user-1",
   });
 
   assert.equal(confirmed.status, "completed");
-  assert.equal(confirmed.result.record_id, 77);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].model, "sale.order");
   assert.equal(calls[0].method, "action_confirm");
