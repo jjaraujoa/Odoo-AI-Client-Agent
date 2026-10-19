@@ -34,10 +34,18 @@ export const MCP_TOOLS = [
     description: "Consulta órdenes de venta y cotizaciones en Odoo 19 por cliente, estado o fecha.",
     inputSchema: {
       type: "object",
+      additionalProperties: false,
       properties: {
-        domain: { type: "array", description: "Filtros de dominio de Odoo, ej. [['state', '=', 'sale']]" },
-        fields: { type: "array", items: { type: "string" }, description: "Campos a recuperar" },
-        limit: { type: "integer", default: 10 },
+        name: { type: "string", description: "Número de documento (ilike)" },
+        partner: { type: "string", description: "Nombre del cliente (ilike sobre partner_id)" },
+        state: {
+          type: "string",
+          enum: ["draft", "sent", "sale", "done", "cancel"],
+          description: "Estado de la orden de venta",
+        },
+        date_from: { type: "string", description: "Fecha desde (YYYY-MM-DD) sobre date_order" },
+        date_to: { type: "string", description: "Fecha hasta (YYYY-MM-DD) sobre date_order" },
+        limit: { type: "integer", minimum: 1, maximum: 50, default: 10, description: "Límite de registros (1..50, default 10)" },
       },
     },
   },
@@ -46,10 +54,18 @@ export const MCP_TOOLS = [
     description: "Consulta pedidos de compra a proveedores en Odoo 19.",
     inputSchema: {
       type: "object",
+      additionalProperties: false,
       properties: {
-        domain: { type: "array", description: "Filtros de dominio de Odoo" },
-        fields: { type: "array", items: { type: "string" } },
-        limit: { type: "integer", default: 10 },
+        name: { type: "string", description: "Número de documento (ilike)" },
+        partner: { type: "string", description: "Nombre del proveedor (ilike sobre partner_id)" },
+        state: {
+          type: "string",
+          enum: ["draft", "sent", "to approve", "purchase", "done", "cancel"],
+          description: "Estado de la orden de compra",
+        },
+        date_from: { type: "string", description: "Fecha desde (YYYY-MM-DD) sobre date_order" },
+        date_to: { type: "string", description: "Fecha hasta (YYYY-MM-DD) sobre date_order" },
+        limit: { type: "integer", minimum: 1, maximum: 50, default: 10, description: "Límite de registros (1..50, default 10)" },
       },
     },
   },
@@ -103,10 +119,17 @@ export const MCP_TOOLS = [
     description: "Consulta iniciativas y oportunidades del CRM en Odoo 19 por cliente, etapa o ingreso esperado.",
     inputSchema: {
       type: "object",
+      additionalProperties: false,
       properties: {
-        domain: { type: "array", description: "Filtros de dominio de Odoo, ej. [['stage_id', '=', 1]]" },
-        fields: { type: "array", items: { type: "string" }, description: "Campos a recuperar" },
-        limit: { type: "integer", default: 10 },
+        name: { type: "string", description: "Nombre de la iniciativa u oportunidad (ilike)" },
+        partner: { type: "string", description: "Nombre del cliente o contacto (ilike sobre partner_id)" },
+        stage: { type: "string", description: "Nombre de la etapa (ilike sobre stage_id)" },
+        type: {
+          type: "string",
+          enum: ["lead", "opportunity"],
+          description: "Tipo de registro (lead u oportunidad)",
+        },
+        limit: { type: "integer", minimum: 1, maximum: 50, default: 10, description: "Límite de registros (1..50, default 10)" },
       },
     },
   },
@@ -420,7 +443,101 @@ export const MCP_TOOLS = [
   },
 ];
 
+export const CLOSED_QUERY_FIELDS = {
+  sale: ["name", "partner_id", "date_order", "state", "amount_total", "currency_id", "user_id"],
+  purchase: ["name", "partner_id", "date_order", "state", "amount_total", "currency_id", "user_id"],
+  crm: ["name", "partner_id", "stage_id", "expected_revenue", "probability", "user_id", "type"],
+};
+
+const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+
+export function buildClosedQuery(toolName, args = {}) {
+  let model;
+  let fixedFields;
+
+  if (toolName === "consultar_orden_venta") {
+    model = "sale.order";
+    fixedFields = CLOSED_QUERY_FIELDS.sale;
+  } else if (toolName === "consultar_orden_compra") {
+    model = "purchase.order";
+    fixedFields = CLOSED_QUERY_FIELDS.purchase;
+  } else if (toolName === "consultar_oportunidades_crm") {
+    model = "crm.lead";
+    fixedFields = CLOSED_QUERY_FIELDS.crm;
+  } else {
+    throw new AppError(400, "invalid_filter", `Herramienta desconocida: ${toolName}`);
+  }
+
+  let limit = 10;
+  if (args?.limit !== undefined && args?.limit !== null) {
+    const parsed = Number(args.limit);
+    if (!Number.isNaN(parsed)) {
+      limit = Math.max(1, Math.min(50, Math.floor(parsed)));
+    }
+  }
+
+  const domain = [];
+
+  if (typeof args?.name === "string" && args.name.length > 0) {
+    domain.push(["name", "ilike", args.name.slice(0, 100)]);
+  }
+
+  if (typeof args?.partner === "string" && args.partner.length > 0) {
+    domain.push(["partner_id", "ilike", args.partner.slice(0, 100)]);
+  }
+
+  if (toolName === "consultar_orden_venta" || toolName === "consultar_orden_compra") {
+    if (args?.state !== undefined && args?.state !== null && args?.state !== "") {
+      const validStates =
+        toolName === "consultar_orden_venta"
+          ? ["draft", "sent", "sale", "done", "cancel"]
+          : ["draft", "sent", "to approve", "purchase", "done", "cancel"];
+
+      if (!validStates.includes(args.state)) {
+        throw new AppError(400, "invalid_filter", `Estado inválido: ${args.state}`);
+      }
+      domain.push(["state", "=", args.state]);
+    }
+
+    if (args?.date_from !== undefined && args?.date_from !== null && args?.date_from !== "") {
+      if (typeof args.date_from !== "string" || !DATE_REGEX.test(args.date_from)) {
+        throw new AppError(400, "invalid_date", `Fecha date_from inválida: ${args.date_from}`);
+      }
+      domain.push(["date_order", ">=", args.date_from]);
+    }
+
+    if (args?.date_to !== undefined && args?.date_to !== null && args?.date_to !== "") {
+      if (typeof args.date_to !== "string" || !DATE_REGEX.test(args.date_to)) {
+        throw new AppError(400, "invalid_date", `Fecha date_to inválida: ${args.date_to}`);
+      }
+      domain.push(["date_order", "<=", args.date_to]);
+    }
+  }
+
+  if (toolName === "consultar_oportunidades_crm") {
+    if (typeof args?.stage === "string" && args.stage.length > 0) {
+      domain.push(["stage_id", "ilike", args.stage.slice(0, 100)]);
+    }
+
+    if (args?.type !== undefined && args?.type !== null && args?.type !== "") {
+      const validTypes = ["lead", "opportunity"];
+      if (!validTypes.includes(args.type)) {
+        throw new AppError(400, "invalid_filter", `Tipo inválido: ${args.type}`);
+      }
+      domain.push(["type", "=", args.type]);
+    }
+  }
+
+  return {
+    model,
+    domain,
+    fields: [...fixedFields],
+    limit,
+  };
+}
+
 export class McpServer {
+  #crmAvailable = null;
   #pendingServerRequests = new Map();
   #nextServerRequestId = 0;
   #output = null;
@@ -586,9 +703,12 @@ export class McpServer {
       }
 
       if (method === "tools/list") {
-        const tools = !this.db
+        let tools = !this.db
           ? MCP_TOOLS.filter((t) => READ_ONLY_TOOLS.has(t.name))
           : MCP_TOOLS;
+        if (!(await this.#isCrmAvailable())) {
+          tools = tools.filter((t) => t.name !== "consultar_oportunidades_crm");
+        }
         return {
           jsonrpc: "2.0",
           id,
@@ -636,6 +756,57 @@ export class McpServer {
     }
   }
 
+  async #isCrmAvailable() {
+    if (this.#crmAvailable !== null) {
+      return this.#crmAvailable;
+    }
+    if (!this.odoo || typeof this.odoo.searchRead !== "function") {
+      this.#crmAvailable = true;
+      return true;
+    }
+    try {
+      const res = await this.odoo.searchRead(
+        "ir.model",
+        [["model", "=", "crm.lead"]],
+        ["id"],
+        { limit: 1 },
+      );
+      this.#crmAvailable = Array.isArray(res) && res.length > 0;
+    } catch {
+      // si lanza error → asumir disponible (no ocultar por error de permisos)
+      this.#crmAvailable = true;
+    }
+    return this.#crmAvailable;
+  }
+
+  async #resolveAllowedFields(toolName, baseFields) {
+    if (!this.db || typeof this.db.query !== "function") {
+      return [...baseFields];
+    }
+    const clientId = typeof this.client === "string" ? this.client : (this.client?.id || null);
+    if (!clientId) {
+      return [...baseFields];
+    }
+    try {
+      const res = await this.db.query(
+        "SELECT allowed_fields FROM agent.tool_policies WHERE client_id=$1 AND tool_name=$2 AND enabled",
+        [clientId, toolName],
+      );
+      const row = res?.rows?.[0];
+      if (row && Array.isArray(row.allowed_fields) && row.allowed_fields.length > 0) {
+        const allowed = new Set(row.allowed_fields);
+        const intersected = baseFields.filter((f) => f === "name" || allowed.has(f));
+        if (!intersected.includes("name")) {
+          intersected.unshift("name");
+        }
+        return intersected;
+      }
+    } catch {
+      // Si no hay fila o falla la consulta, usar los campos fijos
+    }
+    return [...baseFields];
+  }
+
   async #executeTool(name, args, { toolCallId } = {}) {
     if (name === "consultar_estado_accion") {
       if (!this.db) {
@@ -658,11 +829,31 @@ export class McpServer {
     }
 
     // 2. Acciones de lectura estándar hacia Odoo
-    if (name === "consultar_orden_venta") {
-      return this.odoo.searchRead("sale.order", args.domain || [], args.fields || ["name", "partner_id", "date_order", "state", "amount_total"], { limit: args.limit || 10 });
-    }
-    if (name === "consultar_orden_compra") {
-      return this.odoo.searchRead("purchase.order", args.domain || [], args.fields || ["name", "partner_id", "date_order", "state", "amount_total"], { limit: args.limit || 10 });
+    if (
+      name === "consultar_orden_venta" ||
+      name === "consultar_orden_compra" ||
+      name === "consultar_oportunidades_crm"
+    ) {
+      const query = buildClosedQuery(name, args);
+      const fields = await this.#resolveAllowedFields(name, query.fields);
+
+      if (name === "consultar_oportunidades_crm") {
+        try {
+          return await this.odoo.searchRead(query.model, query.domain, fields, { limit: query.limit });
+        } catch (error) {
+          const is404 =
+            error?.status === 404 ||
+            error?.details?.upstreamStatus === 404 ||
+            (error?.code === "upstream_error" && error?.details?.upstreamStatus === 404) ||
+            (error?.message && String(error.message).includes("404"));
+          if (is404) {
+            return "El módulo CRM no está instalado o no está disponible en esta base de Odoo.";
+          }
+          throw error;
+        }
+      }
+
+      return this.odoo.searchRead(query.model, query.domain, fields, { limit: query.limit });
     }
     if (name === "consultar_precio_producto") {
       const domain = args.query ? ["|", ["name", "ilike", args.query], ["default_code", "ilike", args.query]] : [];
@@ -681,9 +872,6 @@ export class McpServer {
     if (name === "consultar_clientes") {
       const domain = args.query ? ["|", ["name", "ilike", args.query], ["vat", "ilike", args.query]] : [["customer_rank", ">", 0]];
       return this.odoo.searchRead("res.partner", domain, ["name", "vat", "email", "phone", "city"], { limit: args.limit || 5 });
-    }
-    if (name === "consultar_oportunidades_crm") {
-      return this.odoo.searchRead("crm.lead", args.domain || [], args.fields || ["name", "partner_id", "stage_id", "expected_revenue", "probability", "user_id"], { limit: args.limit || 10 });
     }
 
     // SOPs y Auditoría de Negocio
