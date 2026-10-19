@@ -460,9 +460,16 @@ export async function decideApproval({
       throw new AppError(404, "approval_not_found", "La solicitud no existe, ya fue decidida o venció.");
     }
 
+    const row = updateRes.rows[0];
+    const preview = typeof row.preview === "string" ? JSON.parse(row.preview) : (row.preview || {});
+    const items = Array.isArray(row.items) ? row.items : JSON.parse(row.items || "[]");
+    const records = items.map((i) => ({ id: i.resId, number: i.display?.name || null }));
+
     return {
       status: decision === "modify" ? "modification_requested" : "cancelled",
       actionId,
+      actionName: preview.actionName,
+      records,
       note: trimmedNote,
     };
   }

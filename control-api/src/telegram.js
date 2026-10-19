@@ -22,6 +22,7 @@ import {
   isApprovalCallback,
   processApprovalCallback,
 } from "./approval-telegram.js";
+import { handleWriteRequest } from "./write-intent.js";
 
 function extractUpdate(update) {
   const callback = update.callback_query;
@@ -150,6 +151,12 @@ function helpText() {
     "• comparaciones, conteos y cálculos seguros sobre esas entidades",
     "• facturas de proveedor PDF/JPG/PNG para crear un borrador",
     "",
+    "Acciones (con aprobación por botones):",
+    "• confirmar o cancelar órdenes de venta",
+    "• validar o cancelar albaranes",
+    "• cancelar facturas en borrador",
+    "Puedes pedir varias a la vez: se aprueban con un solo resumen.",
+    "",
     "Comandos:",
     "/model — ver modelos disponibles",
     "/model automático — selección automática",
@@ -215,6 +222,11 @@ export class TelegramProcessor {
           identity,
           parsed,
           botToken: channel.botToken,
+          session,
+          deps: {
+            remember: (role, kind, content) =>
+              addMemory(this.db, identity, session, role, kind, content),
+          },
         });
       } else {
         let command = null;
@@ -425,6 +437,21 @@ export class TelegramProcessor {
     if (!parsed.text) throw new AppError(400, "empty_message", "Envía una consulta o una factura.");
     const memory = await getRecentMemory(this.db, session, Number(limits.max_context_messages));
     await addMemory(this.db, identity, session, "user", "message", { text: parsed.text });
+    const write = await handleWriteRequest({
+      db: this.db,
+      config: this.config,
+      providers: this.providers,
+      identity,
+      session,
+      odoo,
+      text: parsed.text,
+      memory,
+      chatId: parsed.chatId,
+    });
+    if (write) {
+      await addMemory(this.db, identity, session, "assistant", "message", { text: write.text });
+      return write;
+    }
     const plannerMode = readPlannerMode(identity);
     if (plannerMode === "active") {
       const semantic = await handleSemanticRead({

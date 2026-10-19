@@ -208,12 +208,14 @@ export async function processApprovalCallback({
   identity,
   parsed,
   botToken,
+  session = null,
   deps = {},
 }) {
   const {
     decide = decideApproval,
     edit = editTelegramMessage,
     answer = answerTelegramCallback,
+    remember = null,
   } = deps;
 
   const cb = parseApprovalCallback(parsed.text);
@@ -276,6 +278,13 @@ export async function processApprovalCallback({
   }
 
   if (cb.decision === "modify") {
+    if (typeof remember === "function") {
+      await remember("assistant", "summary", {
+        modification_requested: true,
+        action: result.actionName,
+        records: result.records,
+      });
+    }
     return {
       text: "✏️ Solicitud cancelada para modificarla. Escribe qué quieres cambiar y se preparará una nueva solicitud.",
       eventType: "operational_approval_modify",
