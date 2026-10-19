@@ -35,16 +35,26 @@ export async function createDraftSaleOrder(odoo, {
 
   const values = {
     partner_id: partner,
-    state: "draft",
     note: String(note || ""),
     ...(paymentTermId ? { payment_term_id: Number(paymentTermId) } : {}),
-    order_line: orderLines.map((line) => [0, 0, {
-      product_id: Number(line.productId || line.product_id),
-      product_uom_qty: Number(line.quantity || line.product_uom_qty || 1),
-      price_unit: Number(line.priceUnit || line.price_unit || 0),
-      name: String(line.name || line.description || "Línea de producto"),
-      ...(line.discount !== undefined ? { discount: Number(line.discount) } : {}),
-    }]),
+    order_line: orderLines.map((line) => {
+      const lineVals = {
+        product_id: Number(line.productId || line.product_id),
+        product_uom_qty: Number(line.quantity || line.product_uom_qty || 1),
+      };
+      const priceUnit = line.priceUnit !== undefined ? line.priceUnit : line.price_unit;
+      if (priceUnit !== undefined) {
+        lineVals.price_unit = Number(priceUnit);
+      }
+      const name = line.name !== undefined ? line.name : line.description;
+      if (name !== undefined) {
+        lineVals.name = String(name);
+      }
+      if (line.discount !== undefined) {
+        lineVals.discount = Number(line.discount);
+      }
+      return [0, 0, lineVals];
+    }),
   };
 
   const created = await odoo.create("sale.order", values, DEFAULT_CONTEXT);
@@ -75,15 +85,26 @@ export async function createDraftCustomerInvoice(odoo, {
   const values = {
     move_type: "out_invoice",
     partner_id: partner,
-    state: "draft",
     ref: String(ref || ""),
     ...(invoiceDate ? { invoice_date: invoiceDate } : {}),
-    invoice_line_ids: invoiceLines.map((line) => [0, 0, {
-      product_id: Number(line.productId || line.product_id),
-      quantity: Number(line.quantity || 1),
-      price_unit: Number(line.priceUnit || line.price_unit || 0),
-      name: String(line.name || line.description || "Línea de servicio o producto"),
-    }]),
+    invoice_line_ids: invoiceLines.map((line) => {
+      const lineVals = {
+        product_id: Number(line.productId || line.product_id),
+        quantity: Number(line.quantity || 1),
+      };
+      const priceUnit = line.priceUnit !== undefined ? line.priceUnit : line.price_unit;
+      if (priceUnit !== undefined) {
+        lineVals.price_unit = Number(priceUnit);
+      }
+      const name = line.name !== undefined ? line.name : line.description;
+      if (name !== undefined) {
+        lineVals.name = String(name);
+      }
+      if (line.discount !== undefined) {
+        lineVals.discount = Number(line.discount);
+      }
+      return [0, 0, lineVals];
+    }),
   };
 
   const created = await odoo.create("account.move", values, DEFAULT_CONTEXT);

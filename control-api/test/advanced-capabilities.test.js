@@ -440,7 +440,7 @@ test("McpServer expone las nuevas herramientas operativas y de tableros", async 
   const server = new McpServer({
     odoo: {},
     client: { id: "c1", name: "Demo" },
-    db: null,
+    db: {},
     config: {},
   });
 

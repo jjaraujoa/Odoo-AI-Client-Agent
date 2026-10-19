@@ -132,6 +132,8 @@ Integrate your Odoo 19 instance directly into Claude Desktop, Cursor, or any MCP
 ```
 Available tools include `consultar_orden_venta`, `consultar_inventario`, `consultar_facturas_cliente`, `crear_orden_venta_borrador`, `confirmar_orden_venta`, and ERP health audits.
 
+> **Note**: In local folder mode (without `DATABASE_URL`), only query tools are published; write actions require database mode with a configured control database.
+
 ### 5. 🩺 ERP Health & Bottleneck Audits
 Automated diagnostic tools that continuously scan Odoo for operational risks:
 - **Data Hygiene**: Partners missing tax IDs (NIT/RUT), products with zero standard cost, negative stock levels.

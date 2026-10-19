@@ -47,7 +47,24 @@ export async function fetchJson(url, options = {}, timeoutMs = 30_000) {
       body = { raw: text.slice(0, 1000) };
     }
     if (!response.ok) {
-      throw new AppError(502, "upstream_error", `Servicio externo respondió ${response.status}.`, {
+      let rawMsg = null;
+      if (typeof body?.message === "string") {
+        rawMsg = body.message;
+      } else if (typeof body?.error?.data?.message === "string") {
+        rawMsg = body.error.data.message;
+      } else if (typeof body?.error?.message === "string") {
+        rawMsg = body.error.message;
+      }
+
+      let message = `Servicio externo respondió ${response.status}.`;
+      if (rawMsg) {
+        const texto = rawMsg.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 300);
+        if (texto) {
+          message = `Servicio externo respondió ${response.status}: ${texto}`;
+        }
+      }
+
+      throw new AppError(502, "upstream_error", message, {
         upstreamStatus: response.status,
         upstreamBody: scrubUpstream(body),
       });

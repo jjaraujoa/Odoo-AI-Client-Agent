@@ -6,6 +6,21 @@ import { answerSopQuery } from "./sops.js";
 import { runFullBusinessAudit, inspectStudioFields } from "./audit-business.js";
 import { inspectDashboard, validateSpreadsheetDefinition, createOrUpdateDashboard } from "./spreadsheet.js";
 
+export const READ_ONLY_TOOLS = new Set([
+  "consultar_orden_venta",
+  "consultar_orden_compra",
+  "consultar_precio_producto",
+  "consultar_inventario",
+  "consultar_facturas_pendientes",
+  "consultar_clientes",
+  "consultar_oportunidades_crm",
+  "consultar_procedimiento_sop",
+  "ejecutar_auditoria_negocio",
+  "inspeccionar_campos_studio",
+  "inspeccionar_tablero",
+  "validar_tablero",
+]);
+
 const SUPPORTED_PROTOCOL_VERSIONS = [
   "2025-11-25",
   "2025-06-18",
@@ -107,11 +122,11 @@ export const MCP_TOOLS = [
           type: "array",
           items: {
             type: "object",
-            required: ["productId", "quantity", "priceUnit"],
+            required: ["productId", "quantity"],
             properties: {
               productId: { type: "integer" },
               quantity: { type: "number" },
-              priceUnit: { type: "number" },
+              priceUnit: { type: "number", description: "Opcional: si se omite, Odoo aplica la lista de precios del cliente." },
               discount: { type: "number", description: "Porcentaje de descuento (ej. 10 para 10%)" },
               name: { type: "string" },
             },
@@ -134,11 +149,11 @@ export const MCP_TOOLS = [
           type: "array",
           items: {
             type: "object",
-            required: ["productId", "quantity", "priceUnit"],
+            required: ["productId", "quantity"],
             properties: {
               productId: { type: "integer" },
               quantity: { type: "number" },
-              priceUnit: { type: "number" },
+              priceUnit: { type: "number", description: "Opcional: si se omite, Odoo aplica la lista de precios del cliente." },
               name: { type: "string" },
             },
           },
@@ -571,10 +586,13 @@ export class McpServer {
       }
 
       if (method === "tools/list") {
+        const tools = !this.db
+          ? MCP_TOOLS.filter((t) => READ_ONLY_TOOLS.has(t.name))
+          : MCP_TOOLS;
         return {
           jsonrpc: "2.0",
           id,
-          result: { tools: MCP_TOOLS },
+          result: { tools },
         };
       }
 
@@ -629,6 +647,14 @@ export class McpServer {
         actionId: args.actionId,
         linkedUserId: this.linkedUser?.id ?? null,
       });
+    }
+
+    if (!this.db && !READ_ONLY_TOOLS.has(name)) {
+      throw new AppError(
+        409,
+        "write_tools_require_control_db",
+        "Las acciones de escritura requieren la base de datos de control (modo BD con DATABASE_URL y el cliente registrado). En modo carpeta local solo están disponibles las consultas."
+      );
     }
 
     // 2. Acciones de lectura estándar hacia Odoo
