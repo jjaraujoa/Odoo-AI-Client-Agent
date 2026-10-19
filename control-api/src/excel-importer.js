@@ -1,9 +1,11 @@
-import modXlsx from "xlsx";
+import * as fs from "node:fs";
+import * as XLSX from "xlsx";
 import { AppError } from "./errors.js";
 import { encryptSecret } from "./crypto.js";
 import { OdooJson2Client, createOdooClient } from "./odoo.js";
 
-const XLSX = modXlsx.default || modXlsx;
+// SheetJS >= 0.20 en modo ESM no carga fs por sí mismo: hay que pasárselo para readFile.
+XLSX.set_fs(fs);
 
 function cleanString(val) {
   if (val === null || val === undefined) return "";

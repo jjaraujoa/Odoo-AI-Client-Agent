@@ -22,7 +22,7 @@
 
 ### Requisitos
 - **Node.js**: v20 o v22 LTS (recomendado v22)
-- **pnpm** o **npm**
+- **pnpm** (versión fijada en `control-api/package.json`, requiere Node.js 22.13 o superior)
 - **Docker & Docker Compose** (opcional si usas entorno nativo WSL2 / Linux / macOS)
 
 ### Instalación Rápida
@@ -33,10 +33,10 @@ cd Odoo-AI-Client-Agent
 
 # 2. Instalar dependencias de control-api
 cd control-api
-npm install
+pnpm install
 
 # 3. Ejecutar suite de pruebas
-npm test
+pnpm test
 ```
 
 ---
@@ -54,7 +54,7 @@ npm test
    - `test(workflow): añadir prueba de condición límite`
 3. **Verificar antes de subir**:
    ```bash
-   npm run check
+   pnpm run check
    ```
 4. **Abrir Pull Request**:
    - Describe claramente el problema que resuelve y las pruebas ejecutadas.

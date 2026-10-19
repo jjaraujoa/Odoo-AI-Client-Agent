@@ -167,12 +167,12 @@ Audita la base de datos de Odoo automáticamente y genera reportes de salud empr
 1. **Instalar dependencias de Node.js**:
    ```bash
    cd control-api
-   npm install
+   pnpm install
    ```
 
 2. **Ejecutar suite de pruebas (121 pruebas)**:
    ```bash
-   npm run check
+   pnpm run check
    ```
 
 3. **Iniciar la API de Control**:

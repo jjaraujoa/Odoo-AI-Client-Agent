@@ -19,16 +19,28 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # pnpm 11 requiere Node >= 22.13: las dependencias se instalan con Node 22
+      # y luego las pruebas corren con la versión de la matriz (Node 20 es el mínimo soportado).
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: control-api/package.json
+
+      - name: Setup Node.js 22 para instalar dependencias
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: 'pnpm'
+          cache-dependency-path: control-api/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: control-api
+        run: pnpm install --frozen-lockfile
+
       - name: Setup Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-          cache: 'npm'
-          cache-dependency-path: control-api/package-lock.json
-
-      - name: Install dependencies
-        working-directory: control-api
-        run: npm ci
 
       - name: Syntax verification
         working-directory: control-api
@@ -39,4 +51,4 @@ jobs:
 
       - name: Run test suite
         working-directory: control-api
-        run: npm test
+        run: node --test --test-reporter=spec
