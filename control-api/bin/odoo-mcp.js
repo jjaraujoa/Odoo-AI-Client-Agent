@@ -22,6 +22,22 @@ function parseArg(name, fallback = null) {
   return fallback;
 }
 
+function toApprovalUser(user) {
+  const chatId = user?.telegram_chat_id ?? user?.telegram_user_id ?? null;
+  return user?.id && chatId ? { id: user.id, telegram_chat_id: chatId } : null;
+}
+
+async function resolveExplicitUser(db, clientId, login) {
+  if (!login) return null;
+  const res = await db.query(
+    `SELECT id, odoo_login, odoo_user_id, telegram_user_id, telegram_chat_id
+       FROM agent.linked_users
+      WHERE client_id = $1 AND odoo_login = $2 AND active`,
+    [clientId, login],
+  );
+  return res.rows[0] || null;
+}
+
 async function loadEnvFile(envPath) {
   const env = {};
   if (!existsSync(envPath)) return env;
@@ -94,12 +110,33 @@ async function main() {
       // Conexión opcional a base de datos de control
       let db = null;
       let config = null;
+      let client = clientConfig;
+      let linkedUser = { odoo_login: envSecrets.ODOO_LOGIN || userLogin || "agent@ai.com" };
+      let approvalUser = null;
       const dbUrl = envSecrets.DATABASE_URL || process.env.DATABASE_URL;
       if (dbUrl) {
         try {
           config = loadConfig();
           db = createDb(dbUrl);
           await db.query("SELECT 1");
+          // El cliente (y su configuración, p.ej. el entorno staging) se toma de la BD,
+          // nunca de cliente.yaml, que puede ser editado por el agente que usa el MCP.
+          const clientRes = await db.query(
+            "SELECT * FROM agent.clients WHERE slug = $1 AND active",
+            [clientSlug],
+          );
+          if (clientRes.rows[0]) {
+            client = clientRes.rows[0];
+            const resolved = await resolveExplicitUser(db, client.id, userLogin);
+            if (resolved) {
+              linkedUser = resolved;
+              approvalUser = toApprovalUser(resolved);
+            }
+          } else {
+            process.stderr.write(`⚠️  [odoo-mcp] El cliente '${clientSlug}' no está registrado en la BD de control; solo se habilitan consultas.\n`);
+            await db.end().catch(() => {});
+            db = null;
+          }
         } catch {
           db = null;
         }
@@ -107,10 +144,11 @@ async function main() {
 
       const mcpServer = new McpServer({
         odoo,
-        client: clientConfig,
+        client,
         db,
         config: config || {},
-        linkedUser: { odoo_login: envSecrets.ODOO_LOGIN || userLogin || "agent@ai.com" },
+        linkedUser,
+        approvalUser,
       });
 
       process.stderr.write(`✅ [odoo-mcp] Servidor MCP conectado a Odoo 19: ${baseUrl} (${database}) | Cliente: ${clientSlug}\n`);
@@ -145,6 +183,7 @@ async function main() {
 
     let apiKey = null;
     let linkedUser = null;
+    let approvalUser = null;
 
     if (userLogin) {
       const userRes = await db.query(
@@ -157,6 +196,8 @@ async function main() {
       if (userRes.rows[0]) {
         linkedUser = userRes.rows[0];
         apiKey = decryptSecret(linkedUser, config.credentialMasterKey);
+        // Solo un usuario indicado explícitamente con --user puede recibir aprobaciones por Telegram.
+        approvalUser = toApprovalUser(linkedUser);
       }
     }
 
@@ -199,6 +240,7 @@ async function main() {
       db,
       config,
       linkedUser,
+      approvalUser,
     });
 
     process.stderr.write(`✅ [odoo-mcp] Servidor MCP conectado (BD) para: ${client.slug} (${linkedUser?.odoo_login})\n`);

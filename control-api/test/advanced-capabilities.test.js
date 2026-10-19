@@ -216,7 +216,7 @@ test("Gobernanza en Staging auto-aprueba acciones de Nivel 3 sin código interac
 
   // Cliente configurado en entorno staging
   const stagingClient = {
-    id: "client-stag",
+    id: "d0000000-0000-4000-8000-000000000001",
     name: "Empresa Staging",
     slug: "empresa-stag",
     settings: { environment: "staging" },
@@ -238,10 +238,13 @@ test("Gobernanza en Staging auto-aprueba acciones de Nivel 3 sin código interac
   assert.ok(res.note.includes("Auto-aprobado en entorno Staging"));
 });
 
-test("Gobernanza en Producción exige confirmación de 6 dígitos para Nivel 3", async () => {
+test("Gobernanza en Producción exige aprobación para Nivel 3 y nunca devuelve confirmation_code", async () => {
   const mockOdoo = {
     async call() {
       return true;
+    },
+    async searchRead() {
+      return [{ id: 50, name: "SO-050", state: "draft", amount_total: 100000, write_date: "2026-10-18" }];
     },
   };
 
@@ -254,7 +257,7 @@ test("Gobernanza en Producción exige confirmación de 6 dígitos para Nivel 3",
         return {
           rows: [
             {
-              id: "act-uuid-prod",
+              id: "d0000000-0000-4000-8000-000000000002",
             },
           ],
         };
@@ -265,7 +268,7 @@ test("Gobernanza en Producción exige confirmación de 6 dígitos para Nivel 3",
 
   // Cliente en producción
   const prodClient = {
-    id: "client-prod",
+    id: "d0000000-0000-4000-8000-000000000003",
     name: "Empresa Producción",
     slug: "empresa-prod",
     settings: { environment: "production" },
@@ -279,12 +282,14 @@ test("Gobernanza en Producción exige confirmación de 6 dígitos para Nivel 3",
     params: { resId: 50 },
     odoo: mockOdoo,
     config: {},
+    approvalChannel: "admin",
   });
 
   assert.equal(res.status, "awaiting_approval");
-  assert.equal(res.action_id, "act-uuid-prod");
-  assert.equal(res.confirmation_code.length, 6);
-  assert.ok(res.message.includes(res.confirmation_code));
+  assert.equal(res.action_id, "d0000000-0000-4000-8000-000000000002");
+  assert.equal(res.confirmation_code, undefined);
+  assert.ok(!JSON.stringify(res).includes("confirmation_code"));
+  assert.equal(res.message, "Pendiente de aprobación por un administrador.");
 });
 
 // ============================================================================
@@ -435,7 +440,7 @@ test("McpServer expone las nuevas herramientas operativas y de tableros", async 
   const server = new McpServer({
     odoo: {},
     client: { id: "c1", name: "Demo" },
-    db: null,
+    db: {},
     config: {},
   });
 

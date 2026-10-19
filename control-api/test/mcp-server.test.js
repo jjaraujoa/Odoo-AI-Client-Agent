@@ -55,7 +55,8 @@ test("McpServer tools/list devuelve herramientas de lectura y operativas", async
   assert.ok(toolNames.has("consultar_inventario"));
   assert.ok(toolNames.has("crear_borrador_orden_venta"));
   assert.ok(toolNames.has("confirmar_orden_venta"));
-  assert.ok(toolNames.has("confirmar_accion_critica"));
+  assert.ok(toolNames.has("consultar_estado_accion"));
+  assert.equal(toolNames.has("confirmar_accion_critica"), false);
 });
 
 test("McpServer tools/call ejecuta lectura estándar y devuelve contenido en texto", async () => {

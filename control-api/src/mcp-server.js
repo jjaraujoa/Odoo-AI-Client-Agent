@@ -1,9 +1,32 @@
 import { createInterface } from "node:readline";
 import { AppError } from "./errors.js";
-import { requestOrExecuteAction, confirmOperationalAction } from "./governance.js";
+import { requestOrExecuteAction } from "./governance.js";
+import { decideApproval, getApprovalStatus, APPROVAL_TTL_MS } from "./approvals.js";
 import { answerSopQuery } from "./sops.js";
 import { runFullBusinessAudit, inspectStudioFields } from "./audit-business.js";
 import { inspectDashboard, validateSpreadsheetDefinition, createOrUpdateDashboard } from "./spreadsheet.js";
+
+export const READ_ONLY_TOOLS = new Set([
+  "consultar_orden_venta",
+  "consultar_orden_compra",
+  "consultar_precio_producto",
+  "consultar_inventario",
+  "consultar_facturas_pendientes",
+  "consultar_clientes",
+  "consultar_oportunidades_crm",
+  "consultar_procedimiento_sop",
+  "ejecutar_auditoria_negocio",
+  "inspeccionar_campos_studio",
+  "inspeccionar_tablero",
+  "validar_tablero",
+]);
+
+const SUPPORTED_PROTOCOL_VERSIONS = [
+  "2025-11-25",
+  "2025-06-18",
+  "2025-03-26",
+  "2024-11-05",
+];
 
 export const MCP_TOOLS = [
   {
@@ -122,11 +145,11 @@ export const MCP_TOOLS = [
           type: "array",
           items: {
             type: "object",
-            required: ["productId", "quantity", "priceUnit"],
+            required: ["productId", "quantity"],
             properties: {
               productId: { type: "integer" },
               quantity: { type: "number" },
-              priceUnit: { type: "number" },
+              priceUnit: { type: "number", description: "Opcional: si se omite, Odoo aplica la lista de precios del cliente." },
               discount: { type: "number", description: "Porcentaje de descuento (ej. 10 para 10%)" },
               name: { type: "string" },
             },
@@ -149,11 +172,11 @@ export const MCP_TOOLS = [
           type: "array",
           items: {
             type: "object",
-            required: ["productId", "quantity", "priceUnit"],
+            required: ["productId", "quantity"],
             properties: {
               productId: { type: "integer" },
               quantity: { type: "number" },
-              priceUnit: { type: "number" },
+              priceUnit: { type: "number", description: "Opcional: si se omite, Odoo aplica la lista de precios del cliente." },
               name: { type: "string" },
             },
           },
@@ -191,35 +214,44 @@ export const MCP_TOOLS = [
   },
   {
     name: "confirmar_orden_venta",
-    description: "Confirma una orden de venta en Odoo (Nivel 3 - Requiere aprobación interactiva).",
+    description: "Confirma una orden de venta en Odoo (Nivel 3 - el usuario debe aprobarla. Para varios registros envía todos los IDs en resIds en UNA sola llamada.).",
     inputSchema: {
       type: "object",
-      required: ["resId"],
       properties: {
         resId: { type: "integer", description: "ID de la orden de venta" },
+        resIds: {
+          type: "array",
+          items: { type: "integer" },
+          maxItems: 50,
+          description: "Varios IDs en una sola llamada: se mostrará un solo resumen y una sola aprobación.",
+        },
       },
     },
   },
   {
     name: "validar_albaran_entrega",
-    description: "Valida un albarán de inventario en Odoo (Nivel 3 - Requiere aprobación interactiva).",
+    description: "Valida un albarán de inventario en Odoo (Nivel 3 - el usuario debe aprobarla. Para varios registros envía todos los IDs en resIds en UNA sola llamada.).",
     inputSchema: {
       type: "object",
-      required: ["resId"],
       properties: {
         resId: { type: "integer", description: "ID del albarán" },
+        resIds: {
+          type: "array",
+          items: { type: "integer" },
+          maxItems: 50,
+          description: "Varios IDs en una sola llamada: se mostrará un solo resumen y una sola aprobación.",
+        },
       },
     },
   },
   {
-    name: "confirmar_accion_critica",
-    description: "Aprueba y ejecuta una acción crítica de Nivel 3 mediante su código de confirmación.",
+    name: "consultar_estado_accion",
+    description: "Consulta el estado de una solicitud de aprobación de Nivel 3 (solo lectura).",
     inputSchema: {
       type: "object",
-      required: ["actionId", "confirmationCode"],
+      required: ["actionId"],
       properties: {
-        actionId: { type: "string", description: "UUID de la acción pendiente" },
-        confirmationCode: { type: "string", description: "Código de 6 dígitos" },
+        actionId: { type: "string", description: "UUID de la solicitud" },
       },
     },
   },
@@ -318,34 +350,49 @@ export const MCP_TOOLS = [
   },
   {
     name: "cancelar_orden_venta",
-    description: "Cancela una orden de venta de forma controlada sin borrado físico (Nivel 3).",
+    description: "Cancela una orden de venta de forma controlada sin borrado físico (Nivel 3 - el usuario debe aprobarla. Para varios registros envía todos los IDs en resIds en UNA sola llamada.).",
     inputSchema: {
       type: "object",
-      required: ["resId"],
       properties: {
         resId: { type: "integer", description: "ID de la orden de venta" },
+        resIds: {
+          type: "array",
+          items: { type: "integer" },
+          maxItems: 50,
+          description: "Varios IDs en una sola llamada: se mostrará un solo resumen y una sola aprobación.",
+        },
       },
     },
   },
   {
     name: "cancelar_factura",
-    description: "Cancela una factura en borrador o publicada sin borrado físico (Nivel 3).",
+    description: "Cancela una factura en borrador o publicada sin borrado físico (Nivel 3 - el usuario debe aprobarla. Para varios registros envía todos los IDs en resIds en UNA sola llamada.).",
     inputSchema: {
       type: "object",
-      required: ["resId"],
       properties: {
         resId: { type: "integer", description: "ID de la factura" },
+        resIds: {
+          type: "array",
+          items: { type: "integer" },
+          maxItems: 50,
+          description: "Varios IDs en una sola llamada: se mostrará un solo resumen y una sola aprobación.",
+        },
       },
     },
   },
   {
     name: "cancelar_albaran_entrega",
-    description: "Cancela un albarán de entrega o recepción sin borrado físico (Nivel 3).",
+    description: "Cancela un albarán de entrega o recepción sin borrado físico (Nivel 3 - el usuario debe aprobarla. Para varios registros envía todos los IDs en resIds en UNA sola llamada.).",
     inputSchema: {
       type: "object",
-      required: ["resId"],
       properties: {
         resId: { type: "integer", description: "ID del albarán" },
+        resIds: {
+          type: "array",
+          items: { type: "integer" },
+          maxItems: 50,
+          description: "Varios IDs en una sola llamada: se mostrará un solo resumen y una sola aprobación.",
+        },
       },
     },
   },
@@ -491,13 +538,68 @@ export function buildClosedQuery(toolName, args = {}) {
 
 export class McpServer {
   #crmAvailable = null;
+  #pendingServerRequests = new Map();
+  #nextServerRequestId = 0;
+  #output = null;
+  #elicitationByToolCall = new Map();
 
-  constructor({ odoo, client, db, config, linkedUser = null }) {
+  constructor({
+    odoo,
+    client,
+    db,
+    config,
+    linkedUser = null,
+    approvalUser = null,
+    elicitationTimeoutMs = APPROVAL_TTL_MS,
+  }) {
     this.odoo = odoo;
     this.client = client;
     this.db = db;
     this.config = config;
     this.linkedUser = linkedUser;
+    this.approvalUser = approvalUser;
+    this.elicitationTimeoutMs = elicitationTimeoutMs;
+    this.elicitationSupported = false;
+  }
+
+  #sendRequest(method, params, { timeoutMs, toolCallId } = {}) {
+    return new Promise((resolve, reject) => {
+      if (!this.#output) {
+        return reject(
+          new AppError(503, "no_client_channel", "No hay canal de comunicación con el cliente MCP.")
+        );
+      }
+
+      const id = `srv-${++this.#nextServerRequestId}`;
+      const effectiveTimeout = timeoutMs ?? this.elicitationTimeoutMs;
+
+      let timer = null;
+      if (effectiveTimeout && effectiveTimeout > 0) {
+        timer = setTimeout(() => {
+          this.#pendingServerRequests.delete(id);
+          if (toolCallId !== undefined && toolCallId !== null) {
+            this.#elicitationByToolCall.delete(toolCallId);
+          }
+          reject(new AppError(408, "elicitation_timeout", "El usuario no respondió a tiempo."));
+        }, effectiveTimeout);
+      }
+
+      this.#pendingServerRequests.set(id, { resolve, reject, timer });
+      if (toolCallId !== undefined && toolCallId !== null) {
+        this.#elicitationByToolCall.set(toolCallId, id);
+      }
+
+      try {
+        this.#output.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+      } catch (err) {
+        if (timer) clearTimeout(timer);
+        this.#pendingServerRequests.delete(id);
+        if (toolCallId !== undefined && toolCallId !== null) {
+          this.#elicitationByToolCall.delete(toolCallId);
+        }
+        reject(err);
+      }
+    });
   }
 
   async handleMessage(raw) {
@@ -520,7 +622,42 @@ export class McpServer {
       };
     }
 
+    // Respuestas a peticiones servidor -> cliente
+    if (!request.method && request.id !== undefined && (request.result !== undefined || request.error !== undefined)) {
+      const pending = this.#pendingServerRequests.get(request.id);
+      if (pending) {
+        this.#pendingServerRequests.delete(request.id);
+        if (pending.timer) clearTimeout(pending.timer);
+        if (request.error !== undefined) {
+          pending.reject(request.error);
+        } else {
+          pending.resolve(request.result);
+        }
+      }
+      return null;
+    }
+
     const { id, method, params } = request;
+
+    // Notificación "notifications/cancelled" con params.requestId
+    if (method === "notifications/cancelled") {
+      const clientRequestId = params?.requestId;
+      if (clientRequestId !== undefined && clientRequestId !== null) {
+        const serverReqId = this.#elicitationByToolCall.get(clientRequestId);
+        if (serverReqId) {
+          this.#elicitationByToolCall.delete(clientRequestId);
+          const pending = this.#pendingServerRequests.get(serverReqId);
+          if (pending) {
+            this.#pendingServerRequests.delete(serverReqId);
+            if (pending.timer) clearTimeout(pending.timer);
+            pending.reject(
+              new AppError(499, "elicitation_cancelled", "La solicitud fue cancelada por el cliente.")
+            );
+          }
+        }
+      }
+      return null;
+    }
 
     // Notificaciones no requieren respuesta
     if (id === undefined && method?.startsWith("notifications/")) {
@@ -529,15 +666,33 @@ export class McpServer {
 
     try {
       if (method === "initialize") {
+        const clientVersion = params?.protocolVersion;
+        const negotiatedVersion = SUPPORTED_PROTOCOL_VERSIONS.includes(clientVersion)
+          ? clientVersion
+          : "2025-11-25";
+
+        const clientElicitation = params?.capabilities?.elicitation;
+        const isElicitationObj =
+          clientElicitation !== null &&
+          typeof clientElicitation === "object" &&
+          !Array.isArray(clientElicitation);
+        const hasFormSupport =
+          isElicitationObj &&
+          (Object.keys(clientElicitation).length === 0 || "form" in clientElicitation);
+
+        this.elicitationSupported =
+          (negotiatedVersion === "2025-06-18" || negotiatedVersion === "2025-11-25") &&
+          hasFormSupport;
+
         return {
           jsonrpc: "2.0",
           id,
           result: {
-            protocolVersion: "2024-11-05",
+            protocolVersion: negotiatedVersion,
             capabilities: { tools: {} },
             serverInfo: {
               name: "odoo-ai-mcp",
-              version: "0.2.0",
+              version: "0.3.0",
             },
           },
         };
@@ -548,10 +703,12 @@ export class McpServer {
       }
 
       if (method === "tools/list") {
-        const crmAvailable = await this.#isCrmAvailable();
-        const tools = crmAvailable
-          ? MCP_TOOLS
-          : MCP_TOOLS.filter((t) => t.name !== "consultar_oportunidades_crm");
+        let tools = !this.db
+          ? MCP_TOOLS.filter((t) => READ_ONLY_TOOLS.has(t.name))
+          : MCP_TOOLS;
+        if (!(await this.#isCrmAvailable())) {
+          tools = tools.filter((t) => t.name !== "consultar_oportunidades_crm");
+        }
         return {
           jsonrpc: "2.0",
           id,
@@ -561,7 +718,7 @@ export class McpServer {
 
       if (method === "tools/call") {
         const { name, arguments: toolArgs = {} } = params || {};
-        const result = await this.#executeTool(name, toolArgs);
+        const result = await this.#executeTool(name, toolArgs, { toolCallId: id });
         return {
           jsonrpc: "2.0",
           id,
@@ -650,16 +807,25 @@ export class McpServer {
     return [...baseFields];
   }
 
-  async #executeTool(name, args) {
-    // 1. Confirmar acción crítica
-    if (name === "confirmar_accion_critica") {
-      return confirmOperationalAction({
+  async #executeTool(name, args, { toolCallId } = {}) {
+    if (name === "consultar_estado_accion") {
+      if (!this.db) {
+        return "Requiere la base de datos de control.";
+      }
+      return getApprovalStatus({
         db: this.db,
-        odoo: this.odoo,
+        clientId: this.client.id,
         actionId: args.actionId,
-        confirmationCode: args.confirmationCode,
-        confirmedByUserId: this.linkedUser?.id,
+        linkedUserId: this.linkedUser?.id ?? null,
       });
+    }
+
+    if (!this.db && !READ_ONLY_TOOLS.has(name)) {
+      throw new AppError(
+        409,
+        "write_tools_require_control_db",
+        "Las acciones de escritura requieren la base de datos de control (modo BD con DATABASE_URL y el cliente registrado). En modo carpeta local solo están disponibles las consultas."
+      );
     }
 
     // 2. Acciones de lectura estándar hacia Odoo
@@ -747,7 +913,15 @@ export class McpServer {
     }
 
     // 3. Acciones operativas bajo motor de gobernanza
-    return requestOrExecuteAction({
+    const approvalChannel = this.elicitationSupported
+      ? "mcp_elicitation"
+      : this.approvalUser?.id && this.approvalUser?.telegram_chat_id
+        ? "telegram"
+        : null;
+
+    const approver = approvalChannel === "telegram" ? this.approvalUser : null;
+
+    const result = await requestOrExecuteAction({
       db: this.db,
       config: this.config,
       client: this.client,
@@ -755,10 +929,129 @@ export class McpServer {
       actionName: name,
       params: args,
       odoo: this.odoo,
+      approvalChannel,
+      approver,
     });
+
+    if (result.status === "awaiting_approval" && result.channel === "mcp_elicitation") {
+      return this.#askUserApproval(result, toolCallId);
+    }
+
+    if (result.status === "awaiting_approval" && result.channel === "telegram") {
+      return {
+        ...result,
+        note: "El usuario debe aprobar en Telegram. Puedes consultar el estado con consultar_estado_accion.",
+      };
+    }
+
+    return result;
+  }
+
+  async #askUserApproval(result, toolCallId) {
+    try {
+      const params = {
+        message: `${result.summary}\n\n¿Qué deseas hacer con esta acción?`,
+        requestedSchema: {
+          type: "object",
+          properties: {
+            decision: {
+              type: "string",
+              title: "Decisión",
+              description:
+                "confirmar ejecuta la acción; cancelar la descarta; modificar la descarta para pedir cambios",
+              enum: ["confirmar", "cancelar", "modificar"],
+            },
+            cambios: {
+              type: "string",
+              title: "Cambios (solo si eliges modificar)",
+              maxLength: 500,
+            },
+          },
+          required: ["decision"],
+        },
+      };
+
+      let response;
+      try {
+        response = await this.#sendRequest("elicitation/create", params, {
+          timeoutMs: this.elicitationTimeoutMs,
+          toolCallId,
+        });
+      } catch {
+        response = null;
+      }
+
+      if (response?.action === "accept" && response?.content?.decision === "confirmar") {
+        return await decideApproval({
+          db: this.db,
+          odoo: this.odoo,
+          clientId: this.client.id,
+          actionId: result.action_id,
+          decision: "confirm",
+          deciderLinkedUserId: null,
+          via: "mcp_elicitation",
+        });
+      }
+
+      if (response?.action === "accept" && response?.content?.decision === "modificar") {
+        const cambios = String(response.content.cambios || "").slice(0, 500);
+        await decideApproval({
+          db: this.db,
+          odoo: this.odoo,
+          clientId: this.client.id,
+          actionId: result.action_id,
+          decision: "modify",
+          deciderLinkedUserId: null,
+          via: "mcp_elicitation",
+          note: cambios,
+        });
+        return {
+          status: "modification_requested",
+          action_id: result.action_id,
+          cambios,
+          message:
+            "El usuario pidió cambios. Propón una nueva solicitud con los ajustes; requerirá una nueva aprobación.",
+        };
+      }
+
+      let motivo = "user_declined";
+      if (response?.action === "accept" && response?.content?.decision === "cancelar") {
+        motivo = "user_cancelled";
+      } else if (response?.action === "cancel") {
+        motivo = "user_cancelled";
+      } else if (response?.action === "decline") {
+        motivo = "user_declined";
+      } else if (!response) {
+        motivo = "timeout_or_error";
+      }
+
+      try {
+        await decideApproval({
+          db: this.db,
+          odoo: this.odoo,
+          clientId: this.client.id,
+          actionId: result.action_id,
+          decision: "cancel",
+          deciderLinkedUserId: null,
+          via: "mcp_elicitation",
+          note: motivo,
+        });
+      } catch {}
+
+      return {
+        status: "cancelled",
+        action_id: result.action_id,
+        message: "El usuario no aprobó la acción. No se ejecutó nada.",
+      };
+    } finally {
+      if (toolCallId !== undefined && toolCallId !== null) {
+        this.#elicitationByToolCall.delete(toolCallId);
+      }
+    }
   }
 
   startStdio(inStream = process.stdin, outStream = process.stdout) {
+    this.#output = outStream;
     const rl = createInterface({ input: inStream, terminal: false });
     rl.on("line", async (line) => {
       if (!line.trim()) return;
@@ -766,6 +1059,16 @@ export class McpServer {
       if (response) {
         outStream.write(`${JSON.stringify(response)}\n`);
       }
+    });
+    rl.on("close", () => {
+      for (const [id, pending] of this.#pendingServerRequests.entries()) {
+        if (pending.timer) clearTimeout(pending.timer);
+        pending.reject(
+          new AppError(503, "client_disconnected", "El cliente MCP se desconectó.")
+        );
+      }
+      this.#pendingServerRequests.clear();
+      this.#elicitationByToolCall.clear();
     });
   }
 }

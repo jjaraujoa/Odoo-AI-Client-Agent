@@ -172,6 +172,7 @@ const server = createServer(async (request, response) => {
       const odoo = await resolveTenantOdooClient(db, config, client);
       return json(response, 200, await requestOrExecuteAction({
         db, config, client, actionName: body.action_name, params: body.params || {}, odoo,
+        approvalChannel: "admin",
       }));
     }
 
@@ -183,7 +184,7 @@ const server = createServer(async (request, response) => {
       if (!client) throw new AppError(404, "client_not_found", "Cliente no encontrado.");
       const odoo = await resolveTenantOdooClient(db, config, client);
       return json(response, 200, await confirmOperationalAction({
-        db, odoo, actionId: body.action_id, confirmationCode: body.confirmation_code,
+        db, odoo, clientId: client.id, actionId: body.action_id, decision: body.decision || "confirm", via: "admin", note: body.note,
       }));
     }
 

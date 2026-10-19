@@ -98,7 +98,7 @@ test("evaluateCondition evalúa expresiones relacionales y lógicas determinista
   assert.equal(evaluateCondition(null, context), true);
 });
 
-test("processEventThroughWorkflows ejecuta flujos autónomos y retiene acciones críticas", async () => {
+test("processEventThroughWorkflows ejecuta flujos autónomos y no ejecuta acciones críticas sin aprobador", async () => {
   const workflowYaml = `
 name: "flujo_aprobacion_pedido"
 trigger:
@@ -194,13 +194,12 @@ notifications:
 
     assert.equal(res.triggered, 1);
     assert.equal(res.executions[0].workflow_name, "flujo_aprobacion_pedido");
-    // El paso 1 autónomo se ejecuta, pero el paso 2 crítico requiere confirmación humana (Nivel 3)
-    assert.equal(res.executions[0].status, "pending_approval");
-    assert.ok(res.executions[0].pending_action_id);
-    assert.equal(res.executions[0].steps.length, 3);
+    // El paso 1 autónomo se ejecuta. El paso 2 crítico (Nivel 3) necesita un supervisor
+    // vinculado por Telegram para aprobarlo; sin él, el flujo falla y la orden NO se confirma.
+    assert.equal(res.executions[0].status, "failed");
+    assert.equal(res.executions[0].pending_action_id, null);
     assert.equal(res.executions[0].steps[0].status, "executed");
-    assert.equal(res.executions[0].steps[1].status, "awaiting_approval");
-    assert.equal(res.executions[0].steps[2].notification, "chatter");
+    assert.ok(!executedActions.some((a) => a.type === "call" && a.method === "action_confirm"));
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

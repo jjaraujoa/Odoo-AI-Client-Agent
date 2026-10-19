@@ -332,6 +332,7 @@ export async function confirmInvoice({
         SET status = 'executing', confirmed_at = now()
       WHERE client_id = $1 AND linked_user_id = $2 AND telegram_chat_id = $3
         AND confirmation_code = $4 AND status = 'pending' AND expires_at > now()
+        AND action_type = 'create_vendor_bill_draft'
       RETURNING *`,
     [identity.client_id, identity.id, chatId, code],
   );
@@ -425,6 +426,7 @@ export async function cancelPendingInvoice(db, identity, chatId) {
         SET status = 'cancelled'
       WHERE client_id = $1 AND linked_user_id = $2 AND telegram_chat_id = $3
         AND status = 'pending'
+        AND action_type = 'create_vendor_bill_draft'
       RETURNING id`,
     [identity.client_id, identity.id, chatId],
   );

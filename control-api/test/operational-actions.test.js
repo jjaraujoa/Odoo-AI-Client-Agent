@@ -30,7 +30,7 @@ test("createDraftSaleOrder valida parámetros y genera orden borrador en Odoo", 
   assert.equal(calls.length, 1);
   assert.equal(calls[0].model, "sale.order");
   assert.equal(calls[0].values.partner_id, 42);
-  assert.equal(calls[0].values.state, "draft");
+  assert.equal(calls[0].values.state, undefined);
   assert.equal(calls[0].values.note, "Entrega urgente");
   assert.deepEqual(calls[0].values.order_line, [[0, 0, {
     product_id: 10,
@@ -48,6 +48,38 @@ test("createDraftSaleOrder valida parámetros y genera orden borrador en Odoo", 
     () => createDraftSaleOrder(mockOdoo, { partnerId: 42, orderLines: [] }),
     { code: "empty_order_lines" },
   );
+});
+
+test("createDraftSaleOrder omite price_unit y name cuando no vienen explícitos y los incluye cuando sí vienen", async () => {
+  const calls = [];
+  const mockOdoo = {
+    async create(model, values, context) {
+      calls.push({ model, values, context });
+      return [{ id: 802 }];
+    },
+  };
+
+  // Línea sin priceUnit ni name
+  await createDraftSaleOrder(mockOdoo, {
+    partnerId: 42,
+    orderLines: [{ productId: 10, quantity: 2 }],
+  });
+  assert.deepEqual(calls[0].values.order_line, [[0, 0, {
+    product_id: 10,
+    product_uom_qty: 2,
+  }]]);
+  assert.equal(calls[0].values.state, undefined);
+
+  // Línea con priceUnit 15000
+  await createDraftSaleOrder(mockOdoo, {
+    partnerId: 42,
+    orderLines: [{ productId: 10, quantity: 2, priceUnit: 15000 }],
+  });
+  assert.deepEqual(calls[1].values.order_line, [[0, 0, {
+    product_id: 10,
+    product_uom_qty: 2,
+    price_unit: 15000,
+  }]]);
 });
 
 test("createDraftCustomerInvoice crea factura borrador tipo out_invoice", async () => {
@@ -72,6 +104,44 @@ test("createDraftCustomerInvoice crea factura borrador tipo out_invoice", async 
   assert.equal(calls[0].values.move_type, "out_invoice");
   assert.equal(calls[0].values.partner_id, 15);
   assert.equal(calls[0].values.ref, "REF-001");
+  assert.equal(calls[0].values.state, undefined);
+  assert.deepEqual(calls[0].values.invoice_line_ids, [[0, 0, {
+    product_id: 5,
+    quantity: 1,
+    price_unit: 80000,
+  }]]);
+});
+
+test("createDraftCustomerInvoice omite price_unit y name cuando no vienen explícitos y los incluye cuando sí vienen", async () => {
+  const calls = [];
+  const mockOdoo = {
+    async create(model, values, context) {
+      calls.push({ model, values, context });
+      return [{ id: 903 }];
+    },
+  };
+
+  // Línea sin priceUnit ni name
+  await createDraftCustomerInvoice(mockOdoo, {
+    partnerId: 15,
+    invoiceLines: [{ productId: 5, quantity: 3 }],
+  });
+  assert.deepEqual(calls[0].values.invoice_line_ids, [[0, 0, {
+    product_id: 5,
+    quantity: 3,
+  }]]);
+  assert.equal(calls[0].values.state, undefined);
+
+  // Línea con priceUnit 15000
+  await createDraftCustomerInvoice(mockOdoo, {
+    partnerId: 15,
+    invoiceLines: [{ productId: 5, quantity: 3, priceUnit: 15000 }],
+  });
+  assert.deepEqual(calls[1].values.invoice_line_ids, [[0, 0, {
+    product_id: 5,
+    quantity: 3,
+    price_unit: 15000,
+  }]]);
 });
 
 test("assignResponsibleUser reasigna usuario en modelos soportados", async () => {
@@ -148,7 +218,7 @@ test("requestOrExecuteAction respeta la matriz de gobernanza de 3 niveles", asyn
       }
       if (sql.includes("INSERT INTO agent.pending_actions")) {
         pendingActions.push(params);
-        return { rows: [{ id: "pending-1" }] };
+        return { rows: [{ id: "b0000000-0000-4000-8000-000000000001" }] };
       }
       if (sql.includes("FROM agent.channel_credentials")) {
         return { rows: [] };
@@ -161,10 +231,13 @@ test("requestOrExecuteAction respeta la matriz de gobernanza de 3 niveles", asyn
     async create() { return [{ id: 101 }]; },
     async write() { return true; },
     async call() { return true; },
+    async searchRead() {
+      return [{ id: 101, name: "SO-101", state: "draft", amount_total: 1000, partner_id: [1, "Cliente A"], write_date: "2026-10-18" }];
+    },
   };
 
   const client = {
-    id: "client-uuid",
+    id: "a0000000-0000-4000-8000-000000000001",
     odoo_base_url: "https://odoo.local",
     settings: {},
   };
@@ -203,66 +276,83 @@ test("requestOrExecuteAction respeta la matriz de gobernanza de 3 niveles", asyn
     actionName: "confirmar_orden_venta",
     params: { resId: 101 },
     odoo: mockOdoo,
+    approvalChannel: "admin",
   });
   assert.equal(l3Res.status, "awaiting_approval");
   assert.equal(l3Res.risk_level, 3);
-  assert.equal(typeof l3Res.confirmation_code, "string");
-  assert.equal(l3Res.confirmation_code.length, 6);
+  assert.equal(l3Res.action_id, "b0000000-0000-4000-8000-000000000001");
+  assert.equal(l3Res.confirmation_code, undefined);
   assert.equal(pendingActions.length, 1);
+  assert.equal(l3Res.message, "Pendiente de aprobación por un administrador.");
 });
 
-test("confirmOperationalAction valida código y ejecuta acción pendiente", async () => {
+test("confirmOperationalAction valida y ejecuta acción pendiente vía decideApproval", async () => {
   const calls = [];
   const mockOdoo = {
     async call(model, method, body) {
       calls.push({ model, method, body });
       return true;
     },
+    async searchRead() {
+      return [{ id: 77, name: "SO-077", state: "draft", amount_total: 50000, write_date: "2026-10-18" }];
+    },
   };
 
   const actionRecord = {
-    id: "action-123",
-    client_id: "client-1",
-    status: "pending",
-    confirmation_code: "123456",
+    id: "c0000000-0000-4000-8000-000000000077",
+    client_id: "a0000000-0000-4000-8000-000000000001",
+    status: "executing",
     expires_at: new Date(Date.now() + 60000).toISOString(),
-    preview: {
+    preview: JSON.stringify({
       actionName: "confirmar_orden_venta",
-      params: { resId: 77 },
-    },
+    }),
+    items: JSON.stringify([
+      {
+        resId: 77,
+        fingerprint: { state: "draft", amount_total: 50000, write_date: "2026-10-18" },
+        params: {},
+      },
+    ]),
   };
 
   const mockDb = {
     async query(sql, params) {
-      if (sql.includes("FROM agent.pending_actions")) {
+      if (sql.includes("UPDATE agent.pending_actions") && sql.includes("status = 'executing'")) {
         return { rows: [actionRecord] };
+      }
+      if (sql.includes("UPDATE agent.pending_actions") && sql.includes("status = $2")) {
+        return { rows: [{ ...actionRecord, status: params[1] }] };
+      }
+      if (sql.includes("INSERT INTO agent.action_executions")) {
+        return { rows: [{ id: "exec-2" }] };
       }
       return { rows: [] };
     },
   };
 
-  // Error con código incorrecto
+  // Error con decisión inválida
   await assert.rejects(
     () => confirmOperationalAction({
       db: mockDb,
       odoo: mockOdoo,
-      actionId: "action-123",
-      confirmationCode: "999999",
+      clientId: "a0000000-0000-4000-8000-000000000001",
+      actionId: "c0000000-0000-4000-8000-000000000077",
+      decision: "invalid_choice",
     }),
-    { code: "invalid_confirmation_code" },
+    { code: "invalid_decision" },
   );
 
   // Confirmación exitosa
   const confirmed = await confirmOperationalAction({
     db: mockDb,
     odoo: mockOdoo,
-    actionId: "action-123",
-    confirmationCode: "123456",
+    clientId: "a0000000-0000-4000-8000-000000000001",
+    actionId: "c0000000-0000-4000-8000-000000000077",
+    decision: "confirm",
     confirmedByUserId: "user-1",
   });
 
   assert.equal(confirmed.status, "completed");
-  assert.equal(confirmed.result.record_id, 77);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].model, "sale.order");
   assert.equal(calls[0].method, "action_confirm");
