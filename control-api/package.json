@@ -36,14 +36,14 @@
   "scripts": {
     "start": "node src/server.js",
     "test": "node --test --test-reporter=spec",
-    "check": "npm run lint && node --test",
+    "check": "pnpm run lint && node --test",
     "lint": "node --check src/server.js && node --check bin/odoo-agent-cli.js && node --check bin/odoo-mcp.js",
     "evaluate:read-planner": "node scripts/evaluate-read-planner.js",
     "smoke:read-agent": "node scripts/smoke-read-agent.js"
   },
   "dependencies": {
     "pg": "8.16.3",
-    "xlsx": "^0.18.5",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "yaml": "^2.9.1"
   }
 }

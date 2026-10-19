@@ -175,12 +175,12 @@ Automated diagnostic tools that continuously scan Odoo for operational risks:
 1. **Install dependencies**:
    ```bash
    cd control-api
-   npm install
+   pnpm install
    ```
 
 2. **Run automated test suite (121 unit & integration tests)**:
    ```bash
-   npm run check
+   pnpm run check
    ```
 
 3. **Start the Control API**:
