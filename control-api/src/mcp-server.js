@@ -1,5 +1,19 @@
 import { createInterface } from "node:readline";
+import { createHash, randomBytes } from "node:crypto";
 import { AppError } from "./errors.js";
+import {
+  DEFAULT_MAX_HOURS_PER_DAY,
+  DEFAULT_TIMEZONE,
+  MAX_LINES_PER_CALL,
+  executeTimesheetRegistration,
+  listMyTimesheets,
+  listTimesheetProjectsTasks,
+  normalizeTimesheetLines,
+  prepareTimesheetRegistration,
+  publicLine,
+  resolveCurrentUid,
+  summarizePreparation,
+} from "./timesheets.js";
 import { requestOrExecuteAction } from "./governance.js";
 import { decideApproval, getApprovalStatus, APPROVAL_TTL_MS } from "./approvals.js";
 import { answerSopQuery } from "./sops.js";
@@ -19,7 +33,20 @@ export const READ_ONLY_TOOLS = new Set([
   "inspeccionar_campos_studio",
   "inspeccionar_tablero",
   "validar_tablero",
+  "consultar_mis_proyectos_tareas",
+  "consultar_mis_horas",
 ]);
+
+// Escrituras que pueden habilitarse en modo carpeta local (sin BD de control) mediante
+// `local_write_tools` en cliente.yaml. cliente.yaml puede ser editado por el agente que usa
+// el MCP, así que la lista se intersecta SIEMPRE con esta constante del código, y cada
+// llamada exige aprobación humana (elicitation MCP o token "APLICAR <id>").
+export const LOCAL_WRITE_ALLOWED = Object.freeze(new Set(["registrar_horas"]));
+
+// Herramientas que solo existen en modo carpeta local (no pasan por agent.tool_policies).
+const LOCAL_ONLY_TOOLS = new Set(["registrar_horas"]);
+
+const LOCAL_CONFIRMATION_TTL_MS = 15 * 60 * 1000;
 
 const SUPPORTED_PROTOCOL_VERSIONS = [
   "2025-11-25",
@@ -441,6 +468,72 @@ export const MCP_TOOLS = [
       },
     },
   },
+  {
+    name: "consultar_mis_proyectos_tareas",
+    description:
+      "Lista los proyectos que admiten partes de horas y sus tareas abiertas, para saber dónde imputar horas (solo lectura).",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        query: { type: "string", description: "Texto a buscar en el nombre del proyecto o de la tarea (ilike)" },
+        proyecto_id: { type: "integer", description: "Limitar a un proyecto concreto" },
+        incluir_cerradas: { type: "boolean", default: false, description: "Incluir tareas terminadas o canceladas" },
+        limit: { type: "integer", minimum: 1, maximum: 200, default: 80 },
+      },
+    },
+  },
+  {
+    name: "consultar_mis_horas",
+    description:
+      "Consulta las horas ya registradas (partes de horas) del propio usuario entre dos fechas, con totales por día (solo lectura).",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["desde", "hasta"],
+      properties: {
+        desde: { type: "string", description: "Fecha inicial YYYY-MM-DD (incluida)" },
+        hasta: { type: "string", description: "Fecha final YYYY-MM-DD (incluida)" },
+        limit: { type: "integer", minimum: 1, maximum: 2000, default: 500 },
+      },
+    },
+  },
+  {
+    name: "registrar_horas",
+    description:
+      "Registra líneas de parte de horas del propio usuario (account.analytic.line). Requiere aprobación humana: " +
+      "se pide por elicitation; si el cliente no la soporta, devuelve un id y solo debe repetirse la llamada con " +
+      "confirmacion='APLICAR <id>' cuando el usuario haya escrito esa frase en el chat. Omite líneas ya registradas " +
+      "(misma fecha, proyecto, tarea y descripción), rechaza fechas futuras y más de 12 h por día.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["lineas"],
+      properties: {
+        lineas: {
+          type: "array",
+          minItems: 1,
+          maxItems: MAX_LINES_PER_CALL,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["fecha", "proyecto_id", "horas", "descripcion"],
+            properties: {
+              fecha: { type: "string", description: "YYYY-MM-DD" },
+              proyecto_id: { type: "integer", description: "ID de project.project" },
+              tarea_id: { type: "integer", description: "ID de project.task (opcional)" },
+              horas: { type: "number", exclusiveMinimum: 0, maximum: 12, description: "Horas decimales (1.5 = 1 h 30 min)" },
+              descripcion: { type: "string", maxLength: 500, description: "Descripción de la actividad" },
+            },
+          },
+        },
+        confirmacion: {
+          type: "string",
+          description: "Solo en el segundo paso sin elicitation: exactamente 'APLICAR <id>' tal como lo escribió el usuario.",
+        },
+      },
+    },
+  },
 ];
 
 export const CLOSED_QUERY_FIELDS = {
@@ -542,6 +635,8 @@ export class McpServer {
   #nextServerRequestId = 0;
   #output = null;
   #elicitationByToolCall = new Map();
+  #pendingLocalConfirmations = new Map();
+  #currentUid = null;
 
   constructor({
     odoo,
@@ -551,6 +646,11 @@ export class McpServer {
     linkedUser = null,
     approvalUser = null,
     elicitationTimeoutMs = APPROVAL_TTL_MS,
+    localWriteTools = [],
+    auditor = null,
+    timeZone = DEFAULT_TIMEZONE,
+    maxHoursPerDay = DEFAULT_MAX_HOURS_PER_DAY,
+    now = () => new Date(),
   }) {
     this.odoo = odoo;
     this.client = client;
@@ -560,6 +660,16 @@ export class McpServer {
     this.approvalUser = approvalUser;
     this.elicitationTimeoutMs = elicitationTimeoutMs;
     this.elicitationSupported = false;
+    // Solo en modo carpeta local y solo lo que permite el código.
+    this.localWriteTools = new Set(
+      !db && Array.isArray(localWriteTools)
+        ? localWriteTools.filter((t) => LOCAL_WRITE_ALLOWED.has(t))
+        : [],
+    );
+    this.auditor = auditor;
+    this.timeZone = timeZone || DEFAULT_TIMEZONE;
+    this.maxHoursPerDay = maxHoursPerDay;
+    this.now = now;
   }
 
   #sendRequest(method, params, { timeoutMs, toolCallId } = {}) {
@@ -704,8 +814,8 @@ export class McpServer {
 
       if (method === "tools/list") {
         let tools = !this.db
-          ? MCP_TOOLS.filter((t) => READ_ONLY_TOOLS.has(t.name))
-          : MCP_TOOLS;
+          ? MCP_TOOLS.filter((t) => READ_ONLY_TOOLS.has(t.name) || this.localWriteTools.has(t.name))
+          : MCP_TOOLS.filter((t) => !LOCAL_ONLY_TOOLS.has(t.name));
         if (!(await this.#isCrmAvailable())) {
           tools = tools.filter((t) => t.name !== "consultar_oportunidades_crm");
         }
@@ -820,12 +930,27 @@ export class McpServer {
       });
     }
 
-    if (!this.db && !READ_ONLY_TOOLS.has(name)) {
+    if (!this.db && !READ_ONLY_TOOLS.has(name) && !this.localWriteTools.has(name)) {
       throw new AppError(
         409,
         "write_tools_require_control_db",
         "Las acciones de escritura requieren la base de datos de control (modo BD con DATABASE_URL y el cliente registrado). En modo carpeta local solo están disponibles las consultas."
       );
+    }
+
+    // Partes de horas del propio usuario
+    if (name === "consultar_mis_proyectos_tareas") {
+      return listTimesheetProjectsTasks(this.odoo, args);
+    }
+    if (name === "consultar_mis_horas") {
+      const uid = await this.#resolveUid();
+      return listMyTimesheets(this.odoo, { uid, desde: args?.desde, hasta: args?.hasta, limit: args?.limit });
+    }
+    if (name === "registrar_horas") {
+      if (this.db) {
+        throw new AppError(409, "local_mode_only", "registrar_horas solo está disponible en modo carpeta local.");
+      }
+      return this.#registerTimesheetsLocal(args, toolCallId);
     }
 
     // 2. Acciones de lectura estándar hacia Odoo
@@ -945,6 +1070,151 @@ export class McpServer {
     }
 
     return result;
+  }
+
+  async #resolveUid() {
+    if (!this.#currentUid) {
+      this.#currentUid = await resolveCurrentUid(this.odoo, this.linkedUser?.odoo_login || null);
+    }
+    return this.#currentUid;
+  }
+
+  async #audit(event) {
+    if (!this.auditor) return;
+    await this.auditor.record({
+      tool: "registrar_horas",
+      cliente: this.client?.slug || this.client?.client_slug || null,
+      usuario: this.linkedUser?.odoo_login || null,
+      ...event,
+    });
+  }
+
+  #timesheetOptions(uid) {
+    return { uid, now: this.now(), timeZone: this.timeZone, maxHoursPerDay: this.maxHoursPerDay };
+  }
+
+  #linesFingerprint(rawLines) {
+    const normalized = normalizeTimesheetLines(rawLines, { now: this.now(), timeZone: this.timeZone });
+    return createHash("sha256").update(JSON.stringify(normalized)).digest("hex");
+  }
+
+  #purgeExpiredConfirmations() {
+    const nowMs = this.now().getTime();
+    for (const [id, pending] of this.#pendingLocalConfirmations.entries()) {
+      if (pending.expiresAt <= nowMs) this.#pendingLocalConfirmations.delete(id);
+    }
+  }
+
+  async #registerTimesheetsLocal(args, toolCallId) {
+    const uid = await this.#resolveUid();
+    const rawLines = args?.lineas;
+    const confirmation = typeof args?.confirmacion === "string" ? args.confirmacion.trim() : "";
+    this.#purgeExpiredConfirmations();
+
+    // Paso 2 (sin elicitation): el usuario escribió "APLICAR <id>" en el chat.
+    if (confirmation) {
+      const match = confirmation.match(/^APLICAR\s+([A-F0-9]{6})$/i);
+      if (!match) {
+        throw new AppError(400, "invalid_confirmation", "La confirmación debe ser exactamente 'APLICAR <id>'.");
+      }
+      const actionId = match[1].toUpperCase();
+      const pending = this.#pendingLocalConfirmations.get(actionId);
+      if (!pending) {
+        throw new AppError(404, "confirmation_not_found", `No hay una solicitud pendiente ${actionId} (no existe, ya se usó o expiró). Prepara de nuevo.`);
+      }
+      if (pending.fingerprint !== this.#linesFingerprint(rawLines)) {
+        throw new AppError(409, "confirmation_mismatch", "Las líneas no coinciden con las que el usuario aprobó. Prepara una nueva solicitud.");
+      }
+      this.#pendingLocalConfirmations.delete(actionId);
+      await this.#audit({ etapa: "aprobada", action_id: actionId, via: "token" });
+      return this.#executeTimesheetsLocal(rawLines, uid, actionId, "token");
+    }
+
+    // Paso 1: preparar (valida, idempotencia, límites). No escribe.
+    const prep = await prepareTimesheetRegistration(this.odoo, rawLines, this.#timesheetOptions(uid));
+    const actionId = randomBytes(3).toString("hex").toUpperCase();
+    const summary = summarizePreparation(prep);
+    await this.#audit({
+      etapa: "preparada",
+      action_id: actionId,
+      lineas: prep.toCreate.map(publicLine),
+      omitidas: prep.skipped.map(publicLine),
+    });
+
+    if (prep.toCreate.length === 0) {
+      return { status: "nothing_to_do", action_id: actionId, summary, omitidas: prep.skipped.map(publicLine) };
+    }
+
+    if (this.elicitationSupported) {
+      let response = null;
+      try {
+        response = await this.#sendRequest(
+          "elicitation/create",
+          {
+            message: `${summary}\n\n¿Registrar estas horas en Odoo?`,
+            requestedSchema: {
+              type: "object",
+              properties: {
+                decision: {
+                  type: "string",
+                  title: "Decisión",
+                  description: "confirmar registra las líneas; cancelar no escribe nada",
+                  enum: ["confirmar", "cancelar"],
+                },
+              },
+              required: ["decision"],
+            },
+          },
+          { timeoutMs: this.elicitationTimeoutMs, toolCallId },
+        );
+      } catch {
+        response = null;
+      } finally {
+        if (toolCallId !== undefined && toolCallId !== null) this.#elicitationByToolCall.delete(toolCallId);
+      }
+
+      if (response?.action === "accept" && response?.content?.decision === "confirmar") {
+        await this.#audit({ etapa: "aprobada", action_id: actionId, via: "mcp_elicitation" });
+        return this.#executeTimesheetsLocal(rawLines, uid, actionId, "mcp_elicitation");
+      }
+      const motivo = !response ? "timeout_or_error" : response.action === "decline" ? "user_declined" : "user_cancelled";
+      await this.#audit({ etapa: "cancelada", action_id: actionId, via: "mcp_elicitation", motivo });
+      return { status: "cancelled", action_id: actionId, message: "El usuario no aprobó el registro. No se escribió nada." };
+    }
+
+    this.#pendingLocalConfirmations.set(actionId, {
+      fingerprint: this.#linesFingerprint(rawLines),
+      expiresAt: this.now().getTime() + LOCAL_CONFIRMATION_TTL_MS,
+    });
+    return {
+      status: "awaiting_confirmation",
+      action_id: actionId,
+      summary,
+      expires_in_minutes: LOCAL_CONFIRMATION_TTL_MS / 60000,
+      instrucciones:
+        `Muestra este resumen al usuario. Solo si el usuario escribe en el chat exactamente 'APLICAR ${actionId}', ` +
+        `vuelve a llamar registrar_horas con las mismas líneas y confirmacion='APLICAR ${actionId}'. ` +
+        "No lo hagas por tu cuenta.",
+    };
+  }
+
+  async #executeTimesheetsLocal(rawLines, uid, actionId, via) {
+    // Se vuelve a preparar justo antes de escribir: idempotencia y límites con datos frescos.
+    const prep = await prepareTimesheetRegistration(this.odoo, rawLines, this.#timesheetOptions(uid));
+    const result = await executeTimesheetRegistration(this.odoo, prep);
+    try {
+      await this.#audit({
+        etapa: result.success ? "ejecutada" : "fallida",
+        action_id: actionId,
+        via,
+        creadas: result.creadas,
+        omitidas: result.omitidas,
+        ...(result.success ? {} : { error: result.error, fallida: result.fallida }),
+      });
+    } catch (error) {
+      result.advertencia_auditoria = `No se pudo escribir la auditoría: ${error?.message || error}`;
+    }
+    return { ...result, action_id: actionId };
   }
 
   async #askUserApproval(result, toolCallId) {

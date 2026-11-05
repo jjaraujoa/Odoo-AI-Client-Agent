@@ -7,7 +7,8 @@ import { parse as parseYaml } from "yaml";
 import { loadConfig } from "../src/config.js";
 import { createDb } from "../src/db.js";
 import { OdooJson2Client, createOdooClient } from "../src/odoo.js";
-import { McpServer } from "../src/mcp-server.js";
+import { McpServer, LOCAL_WRITE_ALLOWED } from "../src/mcp-server.js";
+import { createJsonlAuditor } from "../src/local-audit.js";
 import { decryptSecret } from "../src/crypto.js";
 
 const DEFAULT_CLIENTS_ROOT = process.env.ODOO_CLIENTS_ROOT
@@ -88,6 +89,7 @@ async function main() {
       const baseUrl = clientConfig.odoo_base_url;
       const database = clientConfig.odoo_database;
       const apiKey = envSecrets.ODOO_SERVICE_API_KEY || process.env.ODOO_SERVICE_API_KEY;
+      const odooLogin = userLogin || envSecrets.ODOO_LOGIN || clientConfig.odoo_login || null;
 
       if (!apiKey) {
         process.stderr.write(
@@ -101,7 +103,7 @@ async function main() {
         baseUrl,
         database,
         apiKey,
-        login: userLogin || clientConfig.odoo_login || null,
+        login: odooLogin,
         transport: envSecrets.ODOO_API_TRANSPORT || clientConfig.api_transport || process.env.ODOO_API_TRANSPORT || "auto",
         odooVersion: clientConfig.odoo_server_version || null,
         enableMcp: true,
@@ -111,7 +113,7 @@ async function main() {
       let db = null;
       let config = null;
       let client = clientConfig;
-      let linkedUser = { odoo_login: envSecrets.ODOO_LOGIN || userLogin || "agent@ai.com" };
+      let linkedUser = { odoo_login: odooLogin || "agent@ai.com" };
       let approvalUser = null;
       const dbUrl = envSecrets.DATABASE_URL || process.env.DATABASE_URL;
       if (dbUrl) {
@@ -142,6 +144,14 @@ async function main() {
         }
       }
 
+      // Escrituras en modo carpeta local: solo las declaradas en cliente.yaml Y permitidas por el código.
+      const requestedLocalWrites = Array.isArray(clientConfig.local_write_tools) ? clientConfig.local_write_tools : [];
+      const localWriteTools = db ? [] : requestedLocalWrites.filter((t) => LOCAL_WRITE_ALLOWED.has(t));
+      const ignoredLocalWrites = requestedLocalWrites.filter((t) => !LOCAL_WRITE_ALLOWED.has(t));
+      if (ignoredLocalWrites.length) {
+        process.stderr.write(`⚠️  [odoo-mcp] local_write_tools ignoradas (no permitidas en modo local): ${ignoredLocalWrites.join(", ")}\n`);
+      }
+
       const mcpServer = new McpServer({
         odoo,
         client,
@@ -149,9 +159,16 @@ async function main() {
         config: config || {},
         linkedUser,
         approvalUser,
+        localWriteTools,
+        auditor: localWriteTools.length ? createJsonlAuditor(clientDir) : null,
+        timeZone: clientConfig.timezone || undefined,
       });
 
-      process.stderr.write(`✅ [odoo-mcp] Servidor MCP conectado a Odoo 19: ${baseUrl} (${database}) | Cliente: ${clientSlug}\n`);
+      process.stderr.write(
+        `✅ [odoo-mcp] Servidor MCP conectado a Odoo: ${baseUrl} (${database}) | Cliente: ${clientSlug}` +
+          (localWriteTools.length ? ` | Escrituras locales con aprobación: ${localWriteTools.join(", ")}` : "") +
+          "\n",
+      );
       mcpServer.startStdio(process.stdin, process.stdout);
       return;
     } catch (err) {
