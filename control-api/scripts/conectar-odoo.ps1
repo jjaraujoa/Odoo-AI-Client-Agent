@@ -141,7 +141,7 @@ function Show-SecretPrompt([string]$title, [string]$message) {
     Add-Type -AssemblyName System.Drawing
     $form = New-Object System.Windows.Forms.Form
     $label = New-Object System.Windows.Forms.Label
-    $input = New-Object System.Windows.Forms.TextBox
+    $keyBox = New-Object System.Windows.Forms.TextBox
     $ok = New-Object System.Windows.Forms.Button
     $cancel = New-Object System.Windows.Forms.Button
     try {
@@ -149,16 +149,18 @@ function Show-SecretPrompt([string]$title, [string]$message) {
         $form.StartPosition = "CenterScreen"; $form.FormBorderStyle = "FixedDialog"
         $form.MaximizeBox = $false; $form.MinimizeBox = $false; $form.TopMost = $true
         $label.Left = 16; $label.Top = 14; $label.Width = 490; $label.Height = 40; $label.Text = $message
-        $input.Left = 16; $input.Top = 60; $input.Width = 490; $input.UseSystemPasswordChar = $true
+        $keyBox.Left = 16; $keyBox.Top = 60; $keyBox.Width = 490; $keyBox.UseSystemPasswordChar = $true
         $ok.Text = "Guardar y validar"; $ok.Left = 266; $ok.Top = 98; $ok.Width = 120; $ok.DialogResult = "OK"
         $cancel.Text = "Cancelar"; $cancel.Left = 392; $cancel.Top = 98; $cancel.Width = 114; $cancel.DialogResult = "Cancel"
-        $form.Controls.AddRange(@($label, $input, $ok, $cancel))
+        $form.Controls.AddRange(@($label, $keyBox, $ok, $cancel))
         $form.AcceptButton = $ok; $form.CancelButton = $cancel
-        $form.Add_Shown({ $form.Activate(); $input.Focus() })
-        if ($form.ShowDialog() -ne "OK" -or [string]::IsNullOrWhiteSpace($input.Text)) { return $null }
-        return $input.Text.Trim()
+        # $input es una variable automática de PowerShell: no usarla como nombre.
+        $form.ActiveControl = $keyBox
+        $form.Add_Shown({ param($s, $e) $s.Activate() })
+        if ($form.ShowDialog() -ne "OK" -or [string]::IsNullOrWhiteSpace($keyBox.Text)) { return $null }
+        return $keyBox.Text.Trim()
     } finally {
-        $input.Text = ""
+        $keyBox.Text = ""
         $form.Dispose()
     }
 }
