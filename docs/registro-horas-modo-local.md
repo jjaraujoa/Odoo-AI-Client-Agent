@@ -10,7 +10,33 @@ Permite que un consultor registre **sus propias** horas (partes de horas, `accou
 | `consultar_mis_horas` | Lectura | Líneas del empleado del usuario (`employee_id.user_id = uid`) entre `desde` y `hasta`, con totales por día. |
 | `registrar_horas` | Escritura (solo modo local) | Crea líneas con `project_id`, `task_id`, `date`, `unit_amount` y `name`. No envía `employee_id`: Odoo usa el empleado del usuario de la API key. |
 
-## Habilitar la escritura
+## Conexión rápida de un solo usuario (Windows, recomendada)
+
+No necesitas una carpeta de cliente. Ejecuta (sin permisos de administrador):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\control-api\scripts\conectar-odoo.ps1 agregar `
+  -Nombre mi-conexion -Url "https://mi-odoo.example.com" -Base "nombre_tecnico_bd" `
+  -Login "usuario@empresa.com" -PermitirEscritura registrar_horas
+```
+
+1. Detecta la versión de Odoo y el transporte (`legacy_rpc` 14–18, que exige `-Base`; `json2` 19+).
+2. Abre una **ventana segura** para pegar la API key. Nunca pasa por la consola, los argumentos ni los archivos.
+3. Valida la key: obtiene el uid y comprueba que el login coincide.
+4. Guarda la key en **Credenciales de Windows** (`OdooAIAgent/<nombre>/<hash-login>`).
+5. Crea el perfil **sin secretos** en `%APPDATA%\OdooAIAgent\conexiones\<nombre>.json`.
+
+`-PermitirEscritura` es opcional: sin él, la conexión es de solo lectura. Otros comandos: `listar` y `quitar -Nombre <nombre>`.
+
+Arranque del MCP:
+
+```json
+{ "command": "node", "args": ["<repo>/control-api/bin/odoo-mcp.js", "--conexion", "mi-conexion"] }
+```
+
+El MCP lee la key de Credenciales de Windows al arrancar. La auditoría queda en `%APPDATA%\OdooAIAgent\conexiones\<nombre>\auditoria\acciones.jsonl`. `local_write_tools` del perfil también se intersecta con `LOCAL_WRITE_ALLOWED`.
+
+## Alternativa: carpeta de cliente (`cliente.yaml` + `.env`)
 
 En `cliente.yaml` de la carpeta del cliente:
 
