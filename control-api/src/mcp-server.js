@@ -10,7 +10,8 @@ import {
   listTimesheetProjectsTasks,
   listActivityTypes,
   listMyTickets,
-  detectTimesheetExtras,
+  normalizeTimesheetConfig,
+  resolveTimesheetExtras,
   normalizeTimesheetLines,
   prepareTimesheetRegistration,
   publicLine,
@@ -550,7 +551,7 @@ export const MCP_TOOLS = [
               descripcion: { type: "string", maxLength: 500, description: "Descripción de la actividad" },
               tipo_actividad_id: {
                 type: "integer",
-                description: "Tipo de actividad (consultar_tipos_actividad). Obligatorio si la base lo tiene.",
+                description: "Tipo de actividad (consultar_tipos_actividad). Solo si el cliente configura registro_horas.campo_tipo_actividad; puede ser obligatorio.",
               },
               ticket_id: {
                 type: "integer",
@@ -683,6 +684,7 @@ export class McpServer {
     auditor = null,
     timeZone = DEFAULT_TIMEZONE,
     maxHoursPerDay = DEFAULT_MAX_HOURS_PER_DAY,
+    timesheetConfig = null,
     now = () => new Date(),
   }) {
     this.odoo = odoo;
@@ -702,6 +704,8 @@ export class McpServer {
     this.auditor = auditor;
     this.timeZone = timeZone || DEFAULT_TIMEZONE;
     this.maxHoursPerDay = maxHoursPerDay;
+    // Campos propios del cliente (tipo de actividad, ticket): vienen de su configuración privada.
+    this.timesheetConfig = normalizeTimesheetConfig(timesheetConfig);
     this.now = now;
   }
 
@@ -1113,7 +1117,7 @@ export class McpServer {
   }
 
   async #extras() {
-    if (!this.#timesheetExtras) this.#timesheetExtras = await detectTimesheetExtras(this.odoo);
+    if (!this.#timesheetExtras) this.#timesheetExtras = await resolveTimesheetExtras(this.odoo, this.timesheetConfig);
     return this.#timesheetExtras;
   }
 
@@ -1135,7 +1139,7 @@ export class McpServer {
   }
 
   #timesheetOptions(uid) {
-    return { uid, now: this.now(), timeZone: this.timeZone, maxHoursPerDay: this.maxHoursPerDay };
+    return { uid, now: this.now(), timeZone: this.timeZone, maxHoursPerDay: this.maxHoursPerDay, config: this.timesheetConfig };
   }
 
   #linesFingerprint(rawLines) {

@@ -17,7 +17,7 @@ import {
 } from "../src/timesheets.js";
 
 const UID = 7;
-const NOW = () => new Date("2026-11-04T20:00:00Z"); // 15:00 en Bogotá
+const NOW = () => new Date("2026-11-04T20:00:00Z"); // 15:00 en UTC-5
 
 function findTerm(domain, field, op) {
   return domain.find((d) => Array.isArray(d) && d[0] === field && (!op || d[1] === op));
@@ -25,13 +25,13 @@ function findTerm(domain, field, op) {
 
 function createMockOdoo({ existing = [] } = {}) {
   const projects = [
-    { id: 10, name: "Andina Técnica", allow_timesheets: true, partner_id: [100, "Andina Técnica SAS"] },
-    { id: 20, name: "Rodatech", allow_timesheets: true, partner_id: [200, "Rodatech"] },
+    { id: 10, name: "Acme - Implementación", allow_timesheets: true, partner_id: [100, "Acme Corp"] },
+    { id: 20, name: "Globex - Implementación", allow_timesheets: true, partner_id: [200, "Globex - Implementación"] },
     { id: 30, name: "Proyecto sin horas", allow_timesheets: false, partner_id: false },
   ];
   const tasks = [
-    { id: 101, name: "Pruebas integrales", project_id: [10, "Andina Técnica"], stage_id: [1, "En curso"] },
-    { id: 201, name: "Go live", project_id: [20, "Rodatech"], stage_id: [1, "En curso"] },
+    { id: 101, name: "Pruebas integrales", project_id: [10, "Acme - Implementación"], stage_id: [1, "En curso"] },
+    { id: 201, name: "Go live", project_id: [20, "Globex - Implementación"], stage_id: [1, "En curso"] },
   ];
   const lines = existing.map((l) => ({ ...l }));
   let nextId = 5000;
@@ -88,8 +88,8 @@ function createMockOdoo({ existing = [] } = {}) {
   };
 }
 
-const LINE_A = { fecha: "2026-11-03", proyecto_id: 10, tarea_id: 101, horas: 1.5, descripcion: "Empalme consultoría" };
-const LINE_B = { fecha: "2026-11-03", proyecto_id: 20, tarea_id: 201, horas: 2, descripcion: "GO LIVE" };
+const LINE_A = { fecha: "2026-11-03", proyecto_id: 10, tarea_id: 101, horas: 1.5, descripcion: "Revisión de alcance" };
+const LINE_B = { fecha: "2026-11-03", proyecto_id: 20, tarea_id: 201, horas: 2, descripcion: "Go live" };
 
 // ---------- Unidades ----------
 
@@ -100,15 +100,15 @@ test("buildTimesheetValues mapea los campos de account.analytic.line sin employe
     task_id: 101,
     date: "2026-11-03",
     unit_amount: 1.5,
-    name: "Empalme consultoría",
+    name: "Revisión de alcance",
   });
   const [noTask] = normalizeTimesheetLines([{ ...LINE_A, tarea_id: undefined }], { now: NOW() });
   assert.equal("task_id" in buildTimesheetValues(noTask), false);
   assert.equal("employee_id" in buildTimesheetValues(line), false);
 });
 
-test("localIsoDate usa la zona de Bogotá", () => {
-  assert.equal(localIsoDate(new Date("2026-11-05T03:00:00Z"), "America/Bogota"), "2026-11-04");
+test("localIsoDate usa la zona horaria indicada", () => {
+  assert.equal(localIsoDate(new Date("2026-11-05T03:00:00Z"), "Etc/GMT+5"), "2026-11-04");
 });
 
 test("normalizeTimesheetLines rechaza fecha futura, horas <= 0, fecha inválida y descripción vacía", () => {
@@ -126,7 +126,7 @@ test("normalizeTimesheetLines rechaza fecha futura, horas <= 0, fecha inválida 
 test("prepare omite líneas ya registradas (misma fecha, tarea y descripción, sin importar mayúsculas/espacios) y duplicadas en el lote", async () => {
   const odoo = createMockOdoo({
     existing: [
-      { id: 900, date: "2026-11-03", project_id: [10, "Andina"], task_id: [101, "Pruebas"], name: "  empalme   CONSULTORÍA ", unit_amount: 1.5 },
+      { id: 900, date: "2026-11-03", project_id: [10, "Acme"], task_id: [101, "Pruebas"], name: "  revisión   DE ALCANCE ", unit_amount: 1.5 },
     ],
   });
   const prep = await prepareTimesheetRegistration(odoo, [LINE_A, LINE_B, { ...LINE_B }], { uid: UID, now: NOW() });
@@ -165,16 +165,16 @@ test("prepare valida proyecto con horas y coherencia tarea/proyecto", async () =
 test("listMyTimesheets filtra por el empleado del usuario y totaliza por día", async () => {
   const odoo = createMockOdoo({
     existing: [
-      { id: 1, date: "2026-11-03", project_id: [10, "Andina"], task_id: [101, "Pruebas"], name: "a", unit_amount: 1.5 },
-      { id: 2, date: "2026-11-03", project_id: [20, "Rodatech"], task_id: false, name: "b", unit_amount: 2 },
-      { id: 3, date: "2026-11-04", project_id: [20, "Rodatech"], task_id: false, name: "c", unit_amount: 3 },
-      { id: 4, date: "2026-10-30", project_id: [20, "Rodatech"], task_id: false, name: "fuera", unit_amount: 8 },
+      { id: 1, date: "2026-11-03", project_id: [10, "Acme"], task_id: [101, "Pruebas"], name: "a", unit_amount: 1.5 },
+      { id: 2, date: "2026-11-03", project_id: [20, "Globex - Implementación"], task_id: false, name: "b", unit_amount: 2 },
+      { id: 3, date: "2026-11-04", project_id: [20, "Globex - Implementación"], task_id: false, name: "c", unit_amount: 3 },
+      { id: 4, date: "2026-10-30", project_id: [20, "Globex - Implementación"], task_id: false, name: "fuera", unit_amount: 8 },
     ],
   });
   const res = await listMyTimesheets(odoo, { uid: UID, desde: "2026-11-02", hasta: "2026-11-06" });
   assert.equal(res.total_horas, 6.5);
   assert.deepEqual(res.horas_por_dia, { "2026-11-03": 3.5, "2026-11-04": 3 });
-  assert.equal(res.lineas[0].proyecto, "Andina");
+  assert.equal(res.lineas[0].proyecto, "Acme");
   await assert.rejects(listMyTimesheets(odoo, { uid: UID, desde: "2026-11-06", hasta: "2026-11-02" }), /posterior/);
 });
 
@@ -184,11 +184,11 @@ test("resolveCurrentUid usa la autenticación heredada o busca por login en JSON
     adapter: {},
     async searchRead(model, domain) {
       assert.equal(model, "res.users");
-      assert.deepEqual(domain, [["login", "=", "jorge@x.co"]]);
+      assert.deepEqual(domain, [["login", "=", "usuario@example.com"]]);
       return [{ id: 9 }];
     },
   };
-  assert.equal(await resolveCurrentUid(json2, "jorge@x.co"), 9);
+  assert.equal(await resolveCurrentUid(json2, "usuario@example.com"), 9);
   await assert.rejects(resolveCurrentUid({ adapter: {} }, null), /ODOO_LOGIN/);
 });
 
@@ -197,10 +197,10 @@ test("resolveCurrentUid usa la autenticación heredada o busca por login en JSON
 function localServer(opts = {}) {
   return new McpServer({
     odoo: opts.odoo ?? createMockOdoo(),
-    client: { slug: "pragmatic-prod" },
+    client: { slug: "acme-prod" },
     db: null,
     config: {},
-    linkedUser: { odoo_login: "jorge@pragmatic.com.co" },
+    linkedUser: { odoo_login: "usuario@example.com" },
     localWriteTools: opts.localWriteTools ?? [],
     auditor: opts.auditor ?? null,
     now: NOW,
@@ -265,7 +265,7 @@ test("token APLICAR: sin aprobación no escribe; con el token correcto escribe u
     const step1 = parse(await callTool(server, "registrar_horas", { lineas: [LINE_A, LINE_B] }));
     assert.equal(step1.status, "awaiting_confirmation");
     assert.match(step1.action_id, /^[A-F0-9]{6}$/);
-    assert.match(step1.summary, /Andina Técnica \/ Pruebas integrales \| 1.5 h/);
+    assert.match(step1.summary, /Acme - Implementación \/ Pruebas integrales \| 1.5 h/);
     assert.equal(odoo.created.length, 0);
 
     // Token inválido o de otra solicitud
@@ -285,7 +285,7 @@ test("token APLICAR: sin aprobación no escribe; con el token correcto escribe u
     assert.equal(odoo.created.length, 2);
     assert.deepEqual(odoo.created[0], {
       model: "account.analytic.line",
-      values: { project_id: 10, task_id: 101, date: "2026-11-03", unit_amount: 1.5, name: "Empalme consultoría" },
+      values: { project_id: 10, task_id: 101, date: "2026-11-03", unit_amount: 1.5, name: "Revisión de alcance" },
       context: { tracking_source: "ai_agent", mail_create_nosubscribe: true },
     });
 
@@ -302,7 +302,7 @@ test("token APLICAR: sin aprobación no escribe; con el token correcto escribe u
     const audit = (await readFile(join(dir, "auditoria", "acciones.jsonl"), "utf8")).trim().split("\n").map((l) => JSON.parse(l));
     assert.deepEqual(audit.map((a) => a.etapa), ["preparada", "aprobada", "ejecutada", "preparada"]);
     assert.equal(audit[2].creadas.length, 2);
-    assert.equal(audit[2].usuario, "jorge@pragmatic.com.co");
+    assert.equal(audit[2].usuario, "usuario@example.com");
     const raw = JSON.stringify(audit);
     assert.equal(/api[_-]?key/i.test(raw), false);
   } finally {
@@ -360,7 +360,7 @@ test("elicitation: confirmar registra las horas", async () => {
     await initWithElicitation(h);
     h.send({ jsonrpc: "2.0", id: 20, method: "tools/call", params: { name: "registrar_horas", arguments: { lineas: [LINE_A] } } });
     const ask = await h.wait((m) => m.method === "elicitation/create");
-    assert.match(ask.params.message, /Empalme consultoría/);
+    assert.match(ask.params.message, /Revisión de alcance/);
     assert.deepEqual(ask.params.requestedSchema.properties.decision.enum, ["confirmar", "cancelar"]);
     assert.equal(odoo.created.length, 0);
 

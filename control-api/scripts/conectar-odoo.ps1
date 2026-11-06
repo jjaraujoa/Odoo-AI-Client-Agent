@@ -6,28 +6,43 @@
   agregar : detecta la versión de Odoo, pide la API key en una ventana segura,
             la valida (uid + login), la guarda en Credenciales de Windows y crea
             un perfil SIN secretos en %APPDATA%\OdooAIAgent\conexiones\<nombre>.json.
-  listar  : muestra los perfiles y si su credencial existe.
-  quitar  : elimina la credencial de Windows y el perfil.
+  listar     : muestra los perfiles y si su credencial existe.
+  quitar     : elimina la credencial de Windows y el perfil.
+  configurar : cambia registro_horas / zona horaria de un perfil existente (no pide la API key).
+
+  registro_horas (opcional, para campos propios de la base del cliente):
+    -CampoTipoActividad <campo>   many2one de account.analytic.line con el "tipo de actividad"
+    -TipoActividadObligatorio     exige tipo_actividad_id en cada línea (requiere el campo anterior)
+    -CamposTicket <c1>,<c2>       many2one a helpdesk.ticket donde se vincula el ticket
+                                  (por defecto, el nativo helpdesk_ticket_id)
+    Usa "ninguno" para quitar un valor (p. ej. -CampoTipoActividad ninguno).
 
   El MCP se arranca luego con:  node control-api/bin/odoo-mcp.js --conexion <nombre>
   No requiere permisos de administrador.
 
 .EXAMPLE
   powershell -NoProfile -ExecutionPolicy Bypass -File .\control-api\scripts\conectar-odoo.ps1 agregar `
-    -Nombre pragmatic-pruebas -Url "https://mi-staging.dev.odoo.com" -Base "mi-staging" `
-    -Login "usuario@empresa.com" -PermitirEscritura registrar_horas
+    -Nombre acme-pruebas -Url "https://acme-staging.example.com" -Base "acme-staging" `
+    -Login "usuario@example.com" -PermitirEscritura registrar_horas
+
+.EXAMPLE
+  powershell -NoProfile -ExecutionPolicy Bypass -File .\control-api\scripts\conectar-odoo.ps1 configurar `
+    -Nombre acme-pruebas -CampoTipoActividad x_activity_type_id -TipoActividadObligatorio -CamposTicket x_ticket_id
 #>
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("agregar", "listar", "quitar")]
+    [ValidateSet("agregar", "listar", "quitar", "configurar")]
     [string]$Accion = "listar",
     [string]$Nombre,
     [string]$Url,
     [string]$Base,
     [string]$Login,
     [string[]]$PermitirEscritura = @(),
-    [string]$ZonaHoraria = "America/Bogota"
+    [string]$ZonaHoraria,
+    [string]$CampoTipoActividad,
+    [switch]$TipoActividadObligatorio,
+    [string[]]$CamposTicket = @()
 )
 
 Set-StrictMode -Version Latest
@@ -98,7 +113,7 @@ function Get-Sha256Hex([string]$text) {
 
 function Assert-Nombre([string]$n) {
     if (-not $n -or $n -notmatch '^[a-z0-9][a-z0-9-]{1,48}$') {
-        throw "-Nombre es obligatorio: minúsculas, números y guiones (ej. pragmatic-pruebas)."
+        throw "-Nombre es obligatorio: minúsculas, números y guiones (ej. acme-pruebas)."
     }
 }
 
@@ -169,6 +184,8 @@ function Add-Conexion {
     Assert-Nombre $Nombre
     if (-not $Login) { throw "-Login es obligatorio." }
     $baseUrl = Normalize-Url $Url
+    $script:PermitirEscritura = @(Split-Lista $PermitirEscritura)
+    $PermitirEscritura = $script:PermitirEscritura
     $invalid = @($PermitirEscritura | Where-Object { $EscriturasPermitidas -notcontains $_ })
     if ($invalid.Count) { throw "Escrituras no permitidas: $($invalid -join ', '). Solo: $($EscriturasPermitidas -join ', ')." }
 
@@ -223,9 +240,11 @@ function Add-Conexion {
         credential_target = $target
         credential_fingerprint = $fingerprint
         local_write_tools = @($PermitirEscritura)
-        timezone         = $ZonaHoraria
+        timezone         = if ($ZonaHoraria) { $ZonaHoraria } else { $null }
         verified_at      = (Get-Date).ToUniversalTime().ToString("o")
     }
+    $registro = Get-RegistroHoras $null
+    if ($registro) { $perfil["registro_horas"] = $registro }
     New-Item -ItemType Directory -Force -Path $ConexionesRoot | Out-Null
     $path = Get-PerfilPath $Nombre
     [IO.File]::WriteAllText($path, ($perfil | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
@@ -239,6 +258,55 @@ function Add-Conexion {
         perfil        = $path
         mcp           = "node control-api/bin/odoo-mcp.js --conexion $Nombre"
     } | ConvertTo-Json
+}
+
+# powershell -File entrega "a,b" como una sola cadena: separar por comas.
+function Split-Lista([string[]]$valores) {
+    return @($valores | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+}
+
+# Construye la sección registro_horas a partir de los parámetros recibidos, partiendo de la existente.
+function Get-RegistroHoras($existente) {
+    $fieldRegex = '^[a-z_][a-z0-9_]{0,62}$'
+    $r = [ordered]@{}
+    if ($existente) { foreach ($p in $existente.PSObject.Properties) { $r[$p.Name] = $p.Value } }
+    # "ninguno" quita el valor (powershell -File no permite pasar una cadena vacía).
+    if ($script:BoundParams.ContainsKey("CampoTipoActividad")) {
+        if ($CampoTipoActividad -eq "ninguno") {
+            $r.Remove("campo_tipo_actividad"); $r.Remove("tipo_actividad_obligatorio")
+        } else {
+            if ($CampoTipoActividad -notmatch $fieldRegex) { throw "-CampoTipoActividad no es un nombre de campo válido." }
+            $r["campo_tipo_actividad"] = $CampoTipoActividad
+        }
+    }
+    if ($script:BoundParams.ContainsKey("TipoActividadObligatorio")) { $r["tipo_actividad_obligatorio"] = [bool]$TipoActividadObligatorio }
+    if ($script:BoundParams.ContainsKey("CamposTicket")) {
+        $campos = @(Split-Lista $CamposTicket)
+        if ($campos.Count -eq 1 -and $campos[0] -eq "ninguno") {
+            $r.Remove("campos_ticket")
+        } else {
+            $bad = @($campos | Where-Object { $_ -notmatch $fieldRegex })
+            if ($bad.Count -or -not $campos.Count) { throw "-CamposTicket inválidos: $($bad -join ', ')." }
+            $r["campos_ticket"] = @($campos)
+        }
+    }
+    if ($r["tipo_actividad_obligatorio"] -and -not $r["campo_tipo_actividad"]) { throw "-TipoActividadObligatorio requiere -CampoTipoActividad." }
+    if ($r.Count) { return $r } else { return $null }
+}
+
+function Set-Configuracion {
+    Assert-Nombre $Nombre
+    $path = Get-PerfilPath $Nombre
+    if (-not (Test-Path $path)) { throw "No existe la conexión '$Nombre'. Créala con agregar." }
+    $p = Get-Content -Raw -Encoding UTF8 $path | ConvertFrom-Json
+    $existente = if ($p.PSObject.Properties.Name -contains "registro_horas") { $p.registro_horas } else { $null }
+    $registro = Get-RegistroHoras $existente
+    if ($registro) { $p | Add-Member -NotePropertyName registro_horas -NotePropertyValue $registro -Force }
+    elseif ($p.PSObject.Properties.Name -contains "registro_horas") { $p.PSObject.Properties.Remove("registro_horas") }
+    if ($script:BoundParams.ContainsKey("ZonaHoraria")) { $p | Add-Member -NotePropertyName timezone -NotePropertyValue $(if ($ZonaHoraria) { $ZonaHoraria } else { $null }) -Force }
+    [IO.File]::WriteAllText($path, ($p | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
+    $tz = if ($p.PSObject.Properties.Name -contains "timezone") { $p.timezone } else { $null }
+    [ordered]@{ nombre = $Nombre; registro_horas = $registro; timezone = $tz; perfil = $path; nota = "Reinicia el cliente MCP para aplicar los cambios." } | ConvertTo-Json -Depth 4
 }
 
 function Get-Conexiones {
@@ -264,11 +332,14 @@ function Remove-Conexion {
     "Conexión '$Nombre' eliminada (credencial de Windows revocada)."
 }
 
+$script:BoundParams = $PSBoundParameters
+
 try {
     switch ($Accion) {
-        "agregar" { Add-Conexion }
-        "listar"  { Get-Conexiones }
-        "quitar"  { Remove-Conexion }
+        "agregar"    { Add-Conexion }
+        "listar"     { Get-Conexiones }
+        "quitar"     { Remove-Conexion }
+        "configurar" { Set-Configuracion }
     }
 } catch {
     Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red

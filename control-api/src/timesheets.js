@@ -8,7 +8,8 @@ export const TIMESHEET_MODEL = "account.analytic.line";
 export const TIMESHEET_FIELDS = Object.freeze(["id", "date", "project_id", "task_id", "name", "unit_amount"]);
 export const DEFAULT_MAX_HOURS_PER_DAY = 12;
 export const MAX_LINES_PER_CALL = 50;
-export const DEFAULT_TIMEZONE = "America/Bogota";
+// Zona horaria del sistema; configurable con `timezone` en el perfil o cliente.yaml.
+export const DEFAULT_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
 const TIMESHEET_CONTEXT = Object.freeze({
   tracking_source: "ai_agent",
@@ -65,32 +66,83 @@ export function timesheetKey({ date, projectId, taskId, description }) {
   return [date, projectId || 0, taskId || 0, normalizeDescription(description)].join("|");
 }
 
+const FIELD_NAME_REGEX = /^[a-z_][a-z0-9_]{0,62}$/;
+const NATIVE_TICKET_FIELD = "helpdesk_ticket_id";
+
 /**
- * Campos opcionales de la instancia (módulos propios del cliente), detectados con fields_get:
- * - activity_type_id: si existe, el tipo de actividad es OBLIGATORIO en cada línea.
- * - Ticket: prg_ticket_id (+ x_studio_ticket_id, que siempre van juntos) o, si no existen,
- *   el nativo helpdesk_ticket_id.
+ * Valida la sección `registro_horas` de la configuración del cliente (perfil de conexión o
+ * cliente.yaml). Todo es opcional; sin configuración solo se usan campos nativos de Odoo.
+ *   campo_tipo_actividad: many2one de account.analytic.line con el "tipo de actividad" (si la base lo tiene)
+ *   tipo_actividad_obligatorio: true → cada línea debe traer tipo_actividad_id
+ *   campos_ticket: many2one a helpdesk.ticket donde escribir el ticket (por defecto helpdesk_ticket_id)
  */
-export async function detectTimesheetExtras(odoo) {
+export function normalizeTimesheetConfig(raw) {
+  if (raw === undefined || raw === null) return {};
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new AppError(400, "invalid_timesheet_config", "registro_horas debe ser un objeto.");
+  }
+  const out = {};
+  if (raw.campo_tipo_actividad !== undefined && raw.campo_tipo_actividad !== null) {
+    if (typeof raw.campo_tipo_actividad !== "string" || !FIELD_NAME_REGEX.test(raw.campo_tipo_actividad)) {
+      throw new AppError(400, "invalid_timesheet_config", "registro_horas.campo_tipo_actividad no es un nombre de campo válido.");
+    }
+    out.activityField = raw.campo_tipo_actividad;
+  }
+  if (raw.tipo_actividad_obligatorio !== undefined) {
+    if (typeof raw.tipo_actividad_obligatorio !== "boolean") {
+      throw new AppError(400, "invalid_timesheet_config", "registro_horas.tipo_actividad_obligatorio debe ser true o false.");
+    }
+    if (raw.tipo_actividad_obligatorio && !out.activityField) {
+      throw new AppError(400, "invalid_timesheet_config", "tipo_actividad_obligatorio requiere campo_tipo_actividad.");
+    }
+    out.activityRequired = raw.tipo_actividad_obligatorio;
+  }
+  if (raw.campos_ticket !== undefined && raw.campos_ticket !== null) {
+    const list = Array.isArray(raw.campos_ticket) ? raw.campos_ticket : [raw.campos_ticket];
+    if (!list.length || list.length > 5 || list.some((f) => typeof f !== "string" || !FIELD_NAME_REGEX.test(f))) {
+      throw new AppError(400, "invalid_timesheet_config", "registro_horas.campos_ticket debe ser una lista de nombres de campo válidos.");
+    }
+    out.ticketFields = [...new Set(list)];
+  }
+  return out;
+}
+
+/**
+ * Resuelve contra la base (fields_get) los campos opcionales del parte de horas según la
+ * configuración. Un campo configurado que no existe o no es many2one es un error explícito.
+ */
+export async function resolveTimesheetExtras(odoo, config = {}) {
+  const wanted = [
+    ...(config.activityField ? [config.activityField] : []),
+    ...(config.ticketFields || [NATIVE_TICKET_FIELD]),
+  ];
   let fields = {};
   try {
-    fields = (await odoo.call(TIMESHEET_MODEL, "fields_get", {
-      allfields: ["activity_type_id", "prg_ticket_id", "x_studio_ticket_id", "helpdesk_ticket_id"],
-      attributes: ["type", "relation"],
-    })) || {};
+    fields = (await odoo.call(TIMESHEET_MODEL, "fields_get", { allfields: wanted, attributes: ["type", "relation"] })) || {};
   } catch {
     fields = {};
   }
   const m2o = (name, relation) => fields[name]?.type === "many2one" && (!relation || fields[name].relation === relation);
-  const ticketFields = m2o("prg_ticket_id", "helpdesk.ticket")
-    ? ["prg_ticket_id", ...(m2o("x_studio_ticket_id", "helpdesk.ticket") ? ["x_studio_ticket_id"] : [])]
-    : m2o("helpdesk_ticket_id", "helpdesk.ticket")
-      ? ["helpdesk_ticket_id"]
-      : [];
-  return {
-    activityModel: m2o("activity_type_id") ? fields.activity_type_id.relation : null,
-    ticketFields,
-  };
+
+  let activity = null;
+  if (config.activityField) {
+    if (!m2o(config.activityField)) {
+      throw new AppError(400, "invalid_timesheet_config", `El campo de tipo de actividad '${config.activityField}' no existe o no es many2one en ${TIMESHEET_MODEL}.`);
+    }
+    activity = { field: config.activityField, model: fields[config.activityField].relation, required: config.activityRequired === true };
+  }
+
+  let ticketFields = [];
+  if (config.ticketFields) {
+    const bad = config.ticketFields.filter((f) => !m2o(f, "helpdesk.ticket"));
+    if (bad.length) {
+      throw new AppError(400, "invalid_timesheet_config", `Campos de ticket inválidos (deben ser many2one a helpdesk.ticket): ${bad.join(", ")}.`);
+    }
+    ticketFields = config.ticketFields;
+  } else if (m2o(NATIVE_TICKET_FIELD, "helpdesk.ticket")) {
+    ticketFields = [NATIVE_TICKET_FIELD];
+  }
+  return { activity, ticketFields };
 }
 
 /** UID del usuario dueño de la API key. */
@@ -184,7 +236,7 @@ export async function listTimesheetProjectsTasks(odoo, args = {}) {
 
 function extraFieldNames(extras) {
   return [
-    ...(extras?.activityModel ? ["activity_type_id"] : []),
+    ...(extras?.activity ? [extras.activity.field] : []),
     ...(extras?.ticketFields?.length ? [extras.ticketFields[0]] : []),
   ];
 }
@@ -205,24 +257,16 @@ async function readOwnTimesheets(odoo, uid, desde, hasta, limit = 2000, extras =
 
 /** consultar_tipos_actividad */
 export async function listActivityTypes(odoo, extras) {
-  if (!extras?.activityModel) {
-    return { disponible: false, mensaje: "Esta base no tiene tipo de actividad en los partes de horas.", tipos: [] };
+  if (!extras?.activity) {
+    return { disponible: false, mensaje: "No hay un campo de tipo de actividad configurado (registro_horas.campo_tipo_actividad).", tipos: [] };
   }
-  let rows;
-  try {
-    rows = await odoo.searchRead(extras.activityModel, [], ["id", "name", "area", "description", "is_invoiceable"], { limit: 500, order: "name asc" });
-  } catch {
-    rows = await odoo.searchRead(extras.activityModel, [], ["id", "name"], { limit: 500, order: "name asc" });
-  }
+  const rows = await odoo.searchRead(extras.activity.model, [], ["id", "display_name"], { limit: 500, order: "id asc" });
   return {
     disponible: true,
-    obligatorio: true,
+    obligatorio: extras.activity.required,
     tipos: (rows || []).map((r) => ({
       id: r.id,
-      nombre: r.name,
-      ...(r.area !== undefined ? { area: r.area || null } : {}),
-      ...(r.description !== undefined ? { descripcion: r.description || null } : {}),
-      ...(r.is_invoiceable !== undefined ? { facturable: r.is_invoiceable === true } : {}),
+      nombre: r.display_name,
     })),
   };
 }
@@ -248,7 +292,7 @@ export async function listMyTickets(odoo, { uid, query, limit } = {}, extras) {
     const used = await odoo.searchRead(
       TIMESHEET_MODEL,
       [["employee_id.user_id", "=", uid], [field, "in", ids]],
-      ["date", "project_id", "task_id", field, ...(extras.activityModel ? ["activity_type_id"] : [])],
+      ["date", "project_id", "task_id", field, ...(extras.activity ? [extras.activity.field] : [])],
       { limit: 1000, order: "date desc, id desc" },
     );
     for (const l of used || []) {
@@ -275,8 +319,8 @@ export async function listMyTickets(odoo, { uid, query, limit } = {}, extras) {
               proyecto: relationName(last.project_id),
               tarea_id: relationId(last.task_id),
               tarea: relationName(last.task_id) || null,
-              ...(extras.activityModel
-                ? { tipo_actividad_id: relationId(last.activity_type_id), tipo_actividad: relationName(last.activity_type_id) || null }
+              ...(extras.activity
+                ? { tipo_actividad_id: relationId(last[extras.activity.field]), tipo_actividad: relationName(last[extras.activity.field]) || null }
                 : {}),
             }
           : null,
@@ -309,7 +353,7 @@ export async function listMyTimesheets(odoo, { uid, desde, hasta, limit } = {}, 
       tarea: relationName(l.task_id) || null,
       descripcion: l.name,
       horas,
-      ...(extras?.activityModel ? { tipo_actividad: relationName(l.activity_type_id) || null } : {}),
+      ...(extras?.activity ? { tipo_actividad: relationName(l[extras.activity.field]) || null } : {}),
       ...(ticketField ? { ticket_id: relationId(l[ticketField]), ticket: relationName(l[ticketField]) || null } : {}),
     };
   });
@@ -384,7 +428,7 @@ export function buildTimesheetValues(line, extras = null) {
     unit_amount: line.hours,
     name: line.description,
   };
-  if (line.activityTypeId) values.activity_type_id = line.activityTypeId;
+  if (line.activityTypeId && extras?.activity) values[extras.activity.field] = line.activityTypeId;
   if (line.ticketId) {
     for (const field of extras?.ticketFields || []) values[field] = line.ticketId;
   }
@@ -401,6 +445,7 @@ export async function prepareTimesheetRegistration(odoo, rawLines, {
   timeZone = DEFAULT_TIMEZONE,
   now = new Date(),
   maxHoursPerDay = DEFAULT_MAX_HOURS_PER_DAY,
+  config = {},
 } = {}) {
   if (!positiveInt(uid)) {
     throw new AppError(400, "uid_required", "No se pudo determinar el usuario de Odoo.");
@@ -422,19 +467,21 @@ export async function prepareTimesheetRegistration(odoo, rawLines, {
     : [];
   const taskById = new Map((tasks || []).map((t) => [t.id, t]));
 
-  // Tipo de actividad (obligatorio si la base lo tiene) y ticket de Helpdesk.
-  const extras = await detectTimesheetExtras(odoo);
+  // Tipo de actividad y ticket de Helpdesk, según la configuración registro_horas del cliente.
+  const extras = await resolveTimesheetExtras(odoo, config);
   const activityIds = [...new Set(lines.map((l) => l.activityTypeId).filter(Boolean))];
   let activityById = new Map();
-  if (extras.activityModel) {
-    const missing = lines.findIndex((l) => !l.activityTypeId);
+  if (extras.activity) {
+    const missing = extras.activity.required ? lines.findIndex((l) => !l.activityTypeId) : -1;
     if (missing >= 0) {
-      throw new AppError(400, "activity_type_required", `línea ${missing + 1}: tipo_actividad_id es obligatorio en esta base (consulta consultar_tipos_actividad).`);
+      throw new AppError(400, "activity_type_required", `línea ${missing + 1}: tipo_actividad_id es obligatorio según la configuración (consulta consultar_tipos_actividad).`);
     }
-    const rows = await odoo.searchRead(extras.activityModel, [["id", "in", activityIds]], ["id", "name"], { limit: activityIds.length });
-    activityById = new Map((rows || []).map((r) => [r.id, r]));
+    if (activityIds.length) {
+      const rows = await odoo.searchRead(extras.activity.model, [["id", "in", activityIds]], ["id", "display_name"], { limit: activityIds.length });
+      activityById = new Map((rows || []).map((r) => [r.id, { id: r.id, name: r.display_name }]));
+    }
   } else if (activityIds.length) {
-    throw new AppError(400, "activity_type_unsupported", "Esta base no tiene tipo de actividad en los partes de horas.");
+    throw new AppError(400, "activity_type_unsupported", "No hay un campo de tipo de actividad configurado (registro_horas.campo_tipo_actividad).");
   }
   const ticketIds = [...new Set(lines.map((l) => l.ticketId).filter(Boolean))];
   let ticketById = new Map();

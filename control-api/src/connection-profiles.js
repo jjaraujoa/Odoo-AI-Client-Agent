@@ -40,6 +40,10 @@ export function validateConnectionProfile(profile, name) {
     fail("credential_target no pertenece a esta conexión");
   }
   if (profile.local_write_tools !== undefined && !Array.isArray(profile.local_write_tools)) fail("local_write_tools debe ser una lista");
+  if (profile.registro_horas !== undefined && profile.registro_horas !== null &&
+      (typeof profile.registro_horas !== "object" || Array.isArray(profile.registro_horas))) {
+    fail("registro_horas debe ser un objeto");
+  }
   return profile;
 }
 

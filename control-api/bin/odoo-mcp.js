@@ -97,6 +97,7 @@ async function startFromConnection(name) {
     localWriteTools,
     auditor: localWriteTools.length ? createJsonlAuditor(dir) : null,
     timeZone: profile.timezone || undefined,
+    timesheetConfig: profile.registro_horas || null,
   });
 
   process.stderr.write(
@@ -217,6 +218,7 @@ async function main() {
         localWriteTools,
         auditor: localWriteTools.length ? createJsonlAuditor(clientDir) : null,
         timeZone: clientConfig.timezone || undefined,
+        timesheetConfig: clientConfig.registro_horas || null,
       });
 
       process.stderr.write(

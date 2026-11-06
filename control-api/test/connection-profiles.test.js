@@ -12,16 +12,16 @@ import {
 
 const PROFILE = {
   schema_version: 1,
-  nombre: "pragmatic-pruebas",
+  nombre: "acme-pruebas",
   odoo_base_url: "https://staging.example.com",
   odoo_database: "staging-db",
-  login: "jorge@example.com",
+  login: "usuario@example.com",
   uid: 7,
   server_version: "18.0+e",
   api_transport: "legacy_rpc",
-  credential_target: "OdooAIAgent/pragmatic-pruebas/0123456789abcdef",
+  credential_target: "OdooAIAgent/acme-pruebas/0123456789abcdef",
   local_write_tools: ["registrar_horas"],
-  timezone: "America/Bogota",
+  timezone: "Etc/GMT+5",
 };
 
 async function withRoot(fn) {
@@ -41,10 +41,10 @@ test("connectionsRoot usa ODOO_CONNECTIONS_ROOT o %APPDATA%\\OdooAIAgent\\conexi
 
 test("loadConnectionProfile carga un perfil válido (con BOM) y devuelve la carpeta de auditoría", async () => {
   await withRoot(async (root) => {
-    await writeFile(join(root, "pragmatic-pruebas.json"), `\uFEFF${JSON.stringify(PROFILE)}`, "utf8");
-    const { profile, dir } = await loadConnectionProfile("pragmatic-pruebas", { root });
-    assert.equal(profile.login, "jorge@example.com");
-    assert.equal(dir, join(root, "pragmatic-pruebas"));
+    await writeFile(join(root, "acme-pruebas.json"), `\uFEFF${JSON.stringify(PROFILE)}`, "utf8");
+    const { profile, dir } = await loadConnectionProfile("acme-pruebas", { root });
+    assert.equal(profile.login, "usuario@example.com");
+    assert.equal(dir, join(root, "acme-pruebas"));
   });
 });
 
@@ -61,12 +61,12 @@ test("loadConnectionProfile rechaza nombres inválidos, perfiles inexistentes e 
       [{ ...PROFILE, local_write_tools: "registrar_horas" }, /local_write_tools/],
     ];
     for (const [bad, pattern] of cases) {
-      await writeFile(join(root, "pragmatic-pruebas.json"), JSON.stringify(bad), "utf8");
-      await assert.rejects(loadConnectionProfile("pragmatic-pruebas", { root }), pattern);
+      await writeFile(join(root, "acme-pruebas.json"), JSON.stringify(bad), "utf8");
+      await assert.rejects(loadConnectionProfile("acme-pruebas", { root }), pattern);
     }
     // JSON-2 no exige base de datos
-    await writeFile(join(root, "pragmatic-pruebas.json"), JSON.stringify({ ...PROFILE, api_transport: "json2", odoo_database: null }), "utf8");
-    assert.equal((await loadConnectionProfile("pragmatic-pruebas", { root })).profile.api_transport, "json2");
+    await writeFile(join(root, "acme-pruebas.json"), JSON.stringify({ ...PROFILE, api_transport: "json2", odoo_database: null }), "utf8");
+    assert.equal((await loadConnectionProfile("acme-pruebas", { root })).profile.api_transport, "json2");
   });
 });
 

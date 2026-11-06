@@ -6,9 +6,26 @@ Permite que un consultor registre **sus propias** horas (partes de horas, `accou
 
 | Herramienta | Tipo | Qué hace |
 |---|---|---|
-| `consultar_mis_proyectos_tareas` | Lectura | Proyectos con `allow_timesheets` y sus tareas abiertas (filtros `query`, `proyecto_id`). |
+| `consultar_mis_proyectos_tareas` | Lectura | Proyectos con `allow_timesheets` y sus tareas abiertas (filtros `query`, `proyecto_id`, `solo_favoritos`). |
 | `consultar_mis_horas` | Lectura | Líneas del empleado del usuario (`employee_id.user_id = uid`) entre `desde` y `hasta`, con totales por día. |
-| `registrar_horas` | Escritura (solo modo local) | Crea líneas con `project_id`, `task_id`, `date`, `unit_amount` y `name`. No envía `employee_id`: Odoo usa el empleado del usuario de la API key. |
+| `consultar_mis_tickets` | Lectura | Tickets de Helpdesk abiertos asignados al usuario (`user_id`), con el proyecto/tarea de su último registro de horas. |
+| `consultar_tipos_actividad` | Lectura | Valores del campo de tipo de actividad, si el cliente lo configura (ver `registro_horas`). |
+| `registrar_horas` | Escritura (solo modo local) | Crea líneas con `project_id`, `task_id`, `date`, `unit_amount` y `name` (+ tipo de actividad y ticket si aplican). No envía `employee_id`: Odoo usa el empleado del usuario de la API key. |
+
+## Campos propios de la base: `registro_horas` (opcional)
+
+Muchas empresas añaden campos al parte de horas (un "tipo de actividad", un ticket propio…). El agente no asume ninguno: se declaran por cliente en el perfil de conexión (`conectar-odoo.ps1 configurar`) o en `cliente.yaml`:
+
+```yaml
+registro_horas:
+  campo_tipo_actividad: x_activity_type_id   # many2one de account.analytic.line
+  tipo_actividad_obligatorio: true           # exige tipo_actividad_id en cada línea
+  campos_ticket: [x_ticket_id]               # many2one a helpdesk.ticket (por defecto: helpdesk_ticket_id)
+```
+
+- Sin `registro_horas`: no hay tipo de actividad y el ticket se escribe en el campo nativo `helpdesk_ticket_id` (si Helpdesk con partes de horas está instalado).
+- Los campos se validan con `fields_get` al usarse: si no existen o no son many2one, la herramienta devuelve un error explícito en vez de adivinar.
+- Si se declaran varios `campos_ticket`, el mismo ticket se escribe en todos.
 
 ## Conexión rápida de un solo usuario (Windows, recomendada)
 
@@ -26,7 +43,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\control-api\scripts\conect
 4. Guarda la key en **Credenciales de Windows** (`OdooAIAgent/<nombre>/<hash-login>`).
 5. Crea el perfil **sin secretos** en `%APPDATA%\OdooAIAgent\conexiones\<nombre>.json`.
 
-`-PermitirEscritura` es opcional: sin él, la conexión es de solo lectura. Otros comandos: `listar` y `quitar -Nombre <nombre>`.
+`-PermitirEscritura` es opcional: sin él, la conexión es de solo lectura. `-ZonaHoraria` (IANA, p. ej. `America/New_York`) es opcional; por defecto se usa la del sistema. Otros comandos: `listar`, `quitar -Nombre <nombre>` y `configurar -Nombre <nombre> [-CampoTipoActividad <campo>] [-TipoActividadObligatorio] [-CamposTicket <c1>,<c2>] [-ZonaHoraria <tz>]`, que no vuelve a pedir la API key.
 
 Arranque del MCP:
 
@@ -45,7 +62,7 @@ odoo_base_url: "https://<instancia>"
 odoo_database: "<base>"
 api_transport: legacy_rpc      # Odoo 14–18; json2 en 19+
 odoo_server_version: "18.0"
-timezone: "America/Bogota"     # para validar "fechas no futuras"
+timezone: "America/New_York"   # opcional (IANA); para validar "fechas no futuras"
 local_write_tools:
   - registrar_horas
 ```
@@ -65,4 +82,4 @@ local_write_tools:
 
 ## Pruebas
 
-`control-api/test/timesheets.test.js` cubre el mapeo de campos, la validación, la idempotencia, el límite diario, la lista blanca en modo local, el flujo de elicitation y el token de dos pasos.
+`control-api/test/timesheets.test.js` cubre el mapeo de campos, la validación, la idempotencia, el límite diario, la lista blanca en modo local, el flujo de elicitation y el token de dos pasos. `timesheets-extras.test.js` cubre `registro_horas` (con y sin configuración), tickets, tipos de actividad y favoritos.

@@ -2,149 +2,163 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildTimesheetValues,
-  detectTimesheetExtras,
   listActivityTypes,
   listMyTickets,
   listMyTimesheets,
   listTimesheetProjectsTasks,
+  normalizeTimesheetConfig,
   prepareTimesheetRegistration,
+  resolveTimesheetExtras,
   summarizePreparation,
 } from "../src/timesheets.js";
 
-const UID = 251;
+// Datos ficticios. Los campos x_* simulan personalizaciones propias de una base cualquiera.
+const UID = 7;
 const NOW = new Date("2026-11-06T20:00:00Z");
 
-const PRG_FIELDS = {
-  activity_type_id: { type: "many2one", relation: "project_e10s.activity_type" },
-  prg_ticket_id: { type: "many2one", relation: "helpdesk.ticket" },
-  x_studio_ticket_id: { type: "many2one", relation: "helpdesk.ticket" },
+const FIELDS = {
+  x_activity_type_id: { type: "many2one", relation: "x_activity.type" },
+  x_ticket_id: { type: "many2one", relation: "helpdesk.ticket" },
+  x_ticket_copy_id: { type: "many2one", relation: "helpdesk.ticket" },
   helpdesk_ticket_id: { type: "many2one", relation: "helpdesk.ticket" },
+  x_note: { type: "char" },
 };
 
-function mockOdoo({ fields = PRG_FIELDS, lines = [] } = {}) {
+const CONFIG = normalizeTimesheetConfig({
+  campo_tipo_actividad: "x_activity_type_id",
+  tipo_actividad_obligatorio: true,
+  campos_ticket: ["x_ticket_id", "x_ticket_copy_id"],
+});
+
+function mockOdoo({ fields = FIELDS, lines = [] } = {}) {
   const reads = [];
-  const created = [];
   return {
     reads,
-    created,
-    async call(model, method) {
+    async call(model, method, body) {
       assert.equal(model, "account.analytic.line");
       assert.equal(method, "fields_get");
-      return fields;
+      return Object.fromEntries(Object.entries(fields).filter(([k]) => body.allfields.includes(k)));
     },
     async searchRead(model, domain, fieldNames, options = {}) {
       reads.push({ model, domain, fieldNames, options });
-      if (model === "project.project") return [{ id: 999, name: "Rodatech-Implementación", allow_timesheets: true, is_favorite: true }];
-      if (model === "project.task") return [{ id: 32303, name: "Go Live", project_id: [999, "Rodatech-Implementación"] }];
-      if (model === "project_e10s.activity_type") {
-        return [{ id: 2, name: "Reunión con cliente" }, { id: 23, name: "Reunión Interna" }, { id: 65, name: "Capacitación interna" }]
+      if (model === "project.project") return [{ id: 10, name: "Acme - Implementación", allow_timesheets: true, is_favorite: true }];
+      if (model === "project.task") return [{ id: 101, name: "Go Live", project_id: [10, "Acme - Implementación"] }];
+      if (model === "x_activity.type") {
+        return [{ id: 1, display_name: "Reunión con cliente" }, { id: 2, display_name: "Reunión interna" }]
           .filter((r) => !domain.length || domain[0][2].includes(r.id));
       }
       if (model === "helpdesk.ticket") {
-        return [{ id: 20278, name: "HATOVIEJO - Horas de consultoría", partner_id: false, project_id: [719, "Consultoría <10 H"], team_id: [5, "Consultoría"], stage_id: [2, "Asignado"] }];
+        return [{ id: 500, name: "Globex - Bolsa de horas", partner_id: [3, "Globex"], project_id: [20, "Soporte"], team_id: [5, "Soporte"], stage_id: [2, "Asignado"] }];
       }
-      if (model === "account.analytic.line") return lines.filter((l) => !fieldNames.includes("prg_ticket_id") || l.prg_ticket_id);
+      if (model === "account.analytic.line") return lines;
       throw new Error(`modelo inesperado ${model}`);
     },
-    async create(model, values) {
-      created.push({ model, values });
+    async create() {
       return 1;
     },
   };
 }
 
-const LINE = { fecha: "2026-11-05", proyecto_id: 999, tarea_id: 32303, horas: 1, descripcion: "Rodatech – seguimiento" };
+const LINE = { fecha: "2026-11-05", proyecto_id: 10, tarea_id: 101, horas: 1, descripcion: "Acme – seguimiento" };
 
-test("detectTimesheetExtras prefiere prg_ticket_id + x_studio_ticket_id y detecta el tipo de actividad", async () => {
-  assert.deepEqual(await detectTimesheetExtras(mockOdoo()), {
-    activityModel: "project_e10s.activity_type",
-    ticketFields: ["prg_ticket_id", "x_studio_ticket_id"],
-  });
-  assert.deepEqual(await detectTimesheetExtras(mockOdoo({ fields: { helpdesk_ticket_id: PRG_FIELDS.helpdesk_ticket_id } })), {
-    activityModel: null,
-    ticketFields: ["helpdesk_ticket_id"],
-  });
-  const failing = { async call() { throw new Error("sin permiso"); } };
-  assert.deepEqual(await detectTimesheetExtras(failing), { activityModel: null, ticketFields: [] });
+test("normalizeTimesheetConfig valida nombres de campo y coherencia", () => {
+  assert.deepEqual(normalizeTimesheetConfig(null), {});
+  assert.deepEqual(CONFIG, { activityField: "x_activity_type_id", activityRequired: true, ticketFields: ["x_ticket_id", "x_ticket_copy_id"] });
+  assert.throws(() => normalizeTimesheetConfig({ campo_tipo_actividad: "x; drop" }), /nombre de campo válido/);
+  assert.throws(() => normalizeTimesheetConfig({ tipo_actividad_obligatorio: true }), /requiere campo_tipo_actividad/);
+  assert.throws(() => normalizeTimesheetConfig({ campos_ticket: ["ok_id", "Mal"] }), /campos_ticket/);
+  assert.throws(() => normalizeTimesheetConfig([]), /objeto/);
 });
 
-test("con tipo de actividad en la base, es obligatorio y debe existir", async () => {
-  await assert.rejects(prepareTimesheetRegistration(mockOdoo(), [LINE], { uid: UID, now: NOW }), /tipo_actividad_id es obligatorio/);
+test("sin configuración: sin tipo de actividad y ticket por el campo nativo", async () => {
+  const extras = await resolveTimesheetExtras(mockOdoo(), {});
+  assert.deepEqual(extras, { activity: null, ticketFields: ["helpdesk_ticket_id"] });
+  const sinHelpdesk = await resolveTimesheetExtras(mockOdoo({ fields: {} }), {});
+  assert.deepEqual(sinHelpdesk, { activity: null, ticketFields: [] });
+  // Una línea sin tipo se acepta y una con tipo se rechaza
+  assert.equal((await prepareTimesheetRegistration(mockOdoo(), [LINE], { uid: UID, now: NOW })).toCreate.length, 1);
+  await assert.rejects(prepareTimesheetRegistration(mockOdoo(), [{ ...LINE, tipo_actividad_id: 1 }], { uid: UID, now: NOW }), /No hay un campo de tipo de actividad configurado/);
+});
+
+test("con configuración: campos inexistentes o de otro tipo son un error explícito", async () => {
+  await assert.rejects(resolveTimesheetExtras(mockOdoo(), normalizeTimesheetConfig({ campo_tipo_actividad: "x_note" })), /no existe o no es many2one/);
+  await assert.rejects(resolveTimesheetExtras(mockOdoo(), normalizeTimesheetConfig({ campos_ticket: ["x_activity_type_id"] })), /Campos de ticket inválidos/);
+});
+
+test("tipo de actividad obligatorio y validado cuando la configuración lo exige", async () => {
+  await assert.rejects(prepareTimesheetRegistration(mockOdoo(), [LINE], { uid: UID, now: NOW, config: CONFIG }), /tipo_actividad_id es obligatorio/);
   await assert.rejects(
-    prepareTimesheetRegistration(mockOdoo(), [{ ...LINE, tipo_actividad_id: 9999 }], { uid: UID, now: NOW }),
-    /tipo de actividad 9999 no existe/,
+    prepareTimesheetRegistration(mockOdoo(), [{ ...LINE, tipo_actividad_id: 99 }], { uid: UID, now: NOW, config: CONFIG }),
+    /tipo de actividad 99 no existe/,
   );
-  // Base sin el campo: no se exige y se rechaza si se envía
-  const plain = mockOdoo({ fields: {} });
-  assert.equal((await prepareTimesheetRegistration(plain, [LINE], { uid: UID, now: NOW })).toCreate.length, 1);
-  await assert.rejects(prepareTimesheetRegistration(plain, [{ ...LINE, tipo_actividad_id: 2 }], { uid: UID, now: NOW }), /no tiene tipo de actividad/);
+  const opcional = normalizeTimesheetConfig({ campo_tipo_actividad: "x_activity_type_id" });
+  assert.equal((await prepareTimesheetRegistration(mockOdoo(), [LINE], { uid: UID, now: NOW, config: opcional })).toCreate.length, 1);
 });
 
-test("los valores enviados incluyen activity_type_id y ambos campos de ticket; el resumen los muestra", async () => {
-  const odoo = mockOdoo();
-  const prep = await prepareTimesheetRegistration(odoo, [{ ...LINE, tipo_actividad_id: 2, ticket_id: 20278 }], { uid: UID, now: NOW });
+test("los valores enviados usan los campos configurados; el resumen muestra tipo y ticket", async () => {
+  const prep = await prepareTimesheetRegistration(mockOdoo(), [{ ...LINE, tipo_actividad_id: 1, ticket_id: 500 }], { uid: UID, now: NOW, config: CONFIG });
   assert.deepEqual(buildTimesheetValues(prep.toCreate[0], prep.extras), {
-    project_id: 999,
-    task_id: 32303,
+    project_id: 10,
+    task_id: 101,
     date: "2026-11-05",
     unit_amount: 1,
-    name: "Rodatech – seguimiento",
-    activity_type_id: 2,
-    prg_ticket_id: 20278,
-    x_studio_ticket_id: 20278,
+    name: "Acme – seguimiento",
+    x_activity_type_id: 1,
+    x_ticket_id: 500,
+    x_ticket_copy_id: 500,
   });
   const summary = summarizePreparation(prep);
   assert.match(summary, /tipo: Reunión con cliente/);
-  assert.match(summary, /ticket: HATOVIEJO - Horas de consultoría/);
+  assert.match(summary, /ticket: Globex - Bolsa de horas/);
 });
 
-test("listMyTickets filtra por asignado y abiertos, y propone el último proyecto/tarea usado", async () => {
+test("listMyTickets filtra asignados y abiertos y propone el último proyecto/tarea usado", async () => {
   const odoo = mockOdoo({
     lines: [
-      { date: "2026-10-07", project_id: [1025, "HATOVIEJO - Horas"], task_id: [32589, "Bolsa de 5 horas"], prg_ticket_id: [20278, "HATOVIEJO"], activity_type_id: [9, "Consultoría Odoo"] },
-      { date: "2026-09-01", project_id: [1, "viejo"], task_id: false, prg_ticket_id: [20278, "HATOVIEJO"], activity_type_id: false },
+      { date: "2026-10-07", project_id: [30, "Globex - Bolsa"], task_id: [301, "Bolsa de horas"], x_ticket_id: [500, "Globex"], x_activity_type_id: [2, "Reunión interna"] },
+      { date: "2026-09-01", project_id: [1, "viejo"], task_id: false, x_ticket_id: [500, "Globex"], x_activity_type_id: false },
     ],
   });
-  const res = await listMyTickets(odoo, { uid: UID, query: "hato" }, await detectTimesheetExtras(odoo));
+  const res = await listMyTickets(odoo, { uid: UID, query: "globex" }, await resolveTimesheetExtras(odoo, CONFIG));
   const ticketRead = odoo.reads.find((r) => r.model === "helpdesk.ticket");
   assert.deepEqual(ticketRead.domain.slice(0, 2), [["user_id", "=", UID], ["stage_id.fold", "=", false]]);
-  assert.equal(res.tickets[0].id, 20278);
   assert.deepEqual(res.tickets[0].ultimo_registro, {
     fecha: "2026-10-07",
-    proyecto_id: 1025,
-    proyecto: "HATOVIEJO - Horas",
-    tarea_id: 32589,
-    tarea: "Bolsa de 5 horas",
-    tipo_actividad_id: 9,
-    tipo_actividad: "Consultoría Odoo",
+    proyecto_id: 30,
+    proyecto: "Globex - Bolsa",
+    tarea_id: 301,
+    tarea: "Bolsa de horas",
+    tipo_actividad_id: 2,
+    tipo_actividad: "Reunión interna",
   });
-  assert.equal((await listMyTickets(odoo, { uid: UID }, { activityModel: null, ticketFields: [] })).disponible, false);
+  assert.equal((await listMyTickets(odoo, { uid: UID }, { activity: null, ticketFields: [] })).disponible, false);
 });
 
-test("listActivityTypes y listMyTimesheets exponen el tipo de actividad", async () => {
+test("listActivityTypes y listMyTimesheets exponen el tipo de actividad configurado", async () => {
   const odoo = mockOdoo({
-    lines: [{ id: 1, date: "2026-11-03", project_id: [999, "Rodatech"], task_id: [32303, "Go Live"], name: "x", unit_amount: 2, activity_type_id: [2, "Reunión con cliente"], prg_ticket_id: false }],
+    lines: [{ id: 1, date: "2026-11-03", project_id: [10, "Acme"], task_id: [101, "Go Live"], name: "x", unit_amount: 2, x_activity_type_id: [1, "Reunión con cliente"], x_ticket_id: false }],
   });
-  const extras = await detectTimesheetExtras(odoo);
+  const extras = await resolveTimesheetExtras(odoo, CONFIG);
   const tipos = await listActivityTypes(odoo, extras);
   assert.equal(tipos.obligatorio, true);
-  assert.ok(tipos.tipos.some((t) => t.nombre === "Reunión Interna"));
-  const horas = await listMyTimesheets(mockOdoo({ lines: [{ id: 1, date: "2026-11-03", project_id: [999, "Rodatech"], task_id: [32303, "Go Live"], name: "x", unit_amount: 2, activity_type_id: [2, "Reunión con cliente"], prg_ticket_id: false }] }), { uid: UID, desde: "2026-11-03", hasta: "2026-11-03" }, { activityModel: "project_e10s.activity_type", ticketFields: [] });
+  assert.deepEqual(tipos.tipos.map((t) => t.nombre), ["Reunión con cliente", "Reunión interna"]);
+  assert.equal((await listActivityTypes(odoo, { activity: null, ticketFields: [] })).disponible, false);
+  const horas = await listMyTimesheets(odoo, { uid: UID, desde: "2026-11-03", hasta: "2026-11-03" }, extras);
   assert.equal(horas.lineas[0].tipo_actividad, "Reunión con cliente");
 });
 
 test("solo_favoritos filtra proyectos y tareas por is_favorite; la búsqueda incluye el cliente", async () => {
   const odoo = mockOdoo();
-  await listTimesheetProjectsTasks(odoo, { solo_favoritos: true, query: "rodatech" });
+  await listTimesheetProjectsTasks(odoo, { solo_favoritos: true, query: "acme" });
   const proj = odoo.reads.find((r) => r.model === "project.project");
-  assert.deepEqual(proj.domain, [["allow_timesheets", "=", true], ["is_favorite", "=", true], "|", ["name", "ilike", "rodatech"], ["partner_id.name", "ilike", "rodatech"]]);
+  assert.deepEqual(proj.domain, [["allow_timesheets", "=", true], ["is_favorite", "=", true], "|", ["name", "ilike", "acme"], ["partner_id.name", "ilike", "acme"]]);
   const task = odoo.reads.find((r) => r.model === "project.task");
   assert.ok(task.domain.some((d) => Array.isArray(d) && d[0] === "project_id.is_favorite"));
 });
 
 test("con proyecto_id, query filtra las tareas de ese proyecto por nombre", async () => {
   const odoo = mockOdoo();
-  await listTimesheetProjectsTasks(odoo, { proyecto_id: 854, query: "interno" });
+  await listTimesheetProjectsTasks(odoo, { proyecto_id: 10, query: "interno" });
   const task = odoo.reads.find((r) => r.model === "project.task");
-  assert.deepEqual(task.domain.slice(0, 3), [["project_id.allow_timesheets", "=", true], ["project_id", "=", 854], ["name", "ilike", "interno"]]);
+  assert.deepEqual(task.domain.slice(0, 3), [["project_id.allow_timesheets", "=", true], ["project_id", "=", 10], ["name", "ilike", "interno"]]);
 });
