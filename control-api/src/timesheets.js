@@ -65,6 +65,34 @@ export function timesheetKey({ date, projectId, taskId, description }) {
   return [date, projectId || 0, taskId || 0, normalizeDescription(description)].join("|");
 }
 
+/**
+ * Campos opcionales de la instancia (módulos propios del cliente), detectados con fields_get:
+ * - activity_type_id: si existe, el tipo de actividad es OBLIGATORIO en cada línea.
+ * - Ticket: prg_ticket_id (+ x_studio_ticket_id, que siempre van juntos) o, si no existen,
+ *   el nativo helpdesk_ticket_id.
+ */
+export async function detectTimesheetExtras(odoo) {
+  let fields = {};
+  try {
+    fields = (await odoo.call(TIMESHEET_MODEL, "fields_get", {
+      allfields: ["activity_type_id", "prg_ticket_id", "x_studio_ticket_id", "helpdesk_ticket_id"],
+      attributes: ["type", "relation"],
+    })) || {};
+  } catch {
+    fields = {};
+  }
+  const m2o = (name, relation) => fields[name]?.type === "many2one" && (!relation || fields[name].relation === relation);
+  const ticketFields = m2o("prg_ticket_id", "helpdesk.ticket")
+    ? ["prg_ticket_id", ...(m2o("x_studio_ticket_id", "helpdesk.ticket") ? ["x_studio_ticket_id"] : [])]
+    : m2o("helpdesk_ticket_id", "helpdesk.ticket")
+      ? ["helpdesk_ticket_id"]
+      : [];
+  return {
+    activityModel: m2o("activity_type_id") ? fields.activity_type_id.relation : null,
+    ticketFields,
+  };
+}
+
 /** UID del usuario dueño de la API key. */
 export async function resolveCurrentUid(odoo, login) {
   const adapter = odoo?.adapter ?? odoo;
@@ -95,18 +123,22 @@ export async function listTimesheetProjectsTasks(odoo, args = {}) {
   }
   const limit = clampLimit(args.limit, 80, 200);
 
+  const onlyFavorites = args.solo_favoritos === true;
+
   const projectDomain = [["allow_timesheets", "=", true]];
+  if (onlyFavorites) projectDomain.push(["is_favorite", "=", true]);
   if (projectId) projectDomain.push(["id", "=", projectId]);
-  else if (query) projectDomain.push(["name", "ilike", query]);
+  else if (query) projectDomain.push("|", ["name", "ilike", query], ["partner_id.name", "ilike", query]);
 
   const projects = await odoo.searchRead(
     "project.project",
     projectDomain,
-    ["id", "name", "partner_id"],
-    { limit, order: "name asc" },
+    ["id", "name", "partner_id", "is_favorite"],
+    { limit, order: "is_favorite desc, name asc" },
   );
 
   const taskBase = [["project_id.allow_timesheets", "=", true]];
+  if (onlyFavorites) taskBase.push(["project_id.is_favorite", "=", true]);
   if (projectId) taskBase.push(["project_id", "=", projectId]);
   else if (query) taskBase.push("|", ["name", "ilike", query], ["project_id.name", "ilike", query]);
 
@@ -134,6 +166,7 @@ export async function listTimesheetProjectsTasks(odoo, args = {}) {
       id: p.id,
       nombre: p.name,
       cliente: relationName(p.partner_id) || null,
+      favorito: p.is_favorite === true,
     })),
     tareas: (tasks || []).map((t) => ({
       id: t.id,
@@ -145,7 +178,14 @@ export async function listTimesheetProjectsTasks(odoo, args = {}) {
   };
 }
 
-async function readOwnTimesheets(odoo, uid, desde, hasta, limit = 2000) {
+function extraFieldNames(extras) {
+  return [
+    ...(extras?.activityModel ? ["activity_type_id"] : []),
+    ...(extras?.ticketFields?.length ? [extras.ticketFields[0]] : []),
+  ];
+}
+
+async function readOwnTimesheets(odoo, uid, desde, hasta, limit = 2000, extras = null) {
   return odoo.searchRead(
     TIMESHEET_MODEL,
     [
@@ -154,19 +194,102 @@ async function readOwnTimesheets(odoo, uid, desde, hasta, limit = 2000) {
       ["date", ">=", desde],
       ["date", "<=", hasta],
     ],
-    [...TIMESHEET_FIELDS],
+    [...TIMESHEET_FIELDS, ...extraFieldNames(extras)],
     { limit, order: "date asc, id asc" },
   );
 }
 
+/** consultar_tipos_actividad */
+export async function listActivityTypes(odoo, extras) {
+  if (!extras?.activityModel) {
+    return { disponible: false, mensaje: "Esta base no tiene tipo de actividad en los partes de horas.", tipos: [] };
+  }
+  let rows;
+  try {
+    rows = await odoo.searchRead(extras.activityModel, [], ["id", "name", "area", "description", "is_invoiceable"], { limit: 500, order: "name asc" });
+  } catch {
+    rows = await odoo.searchRead(extras.activityModel, [], ["id", "name"], { limit: 500, order: "name asc" });
+  }
+  return {
+    disponible: true,
+    obligatorio: true,
+    tipos: (rows || []).map((r) => ({
+      id: r.id,
+      nombre: r.name,
+      ...(r.area !== undefined ? { area: r.area || null } : {}),
+      ...(r.description !== undefined ? { descripcion: r.description || null } : {}),
+      ...(r.is_invoiceable !== undefined ? { facturable: r.is_invoiceable === true } : {}),
+    })),
+  };
+}
+
+/** consultar_mis_tickets: tickets abiertos asignados al usuario y dónde se imputaron por última vez. */
+export async function listMyTickets(odoo, { uid, query, limit } = {}, extras) {
+  if (!extras?.ticketFields?.length) {
+    return { disponible: false, mensaje: "Esta base no vincula partes de horas con tickets de Helpdesk.", tickets: [] };
+  }
+  const domain = [["user_id", "=", uid], ["stage_id.fold", "=", false]];
+  const q = typeof query === "string" ? query.trim().slice(0, 100) : "";
+  if (q) domain.push("|", ["name", "ilike", q], ["partner_id.name", "ilike", q]);
+  const tickets = await odoo.searchRead(
+    "helpdesk.ticket",
+    domain,
+    ["id", "name", "partner_id", "project_id", "team_id", "stage_id"],
+    { limit: clampLimit(limit, 50, 200), order: "id desc" },
+  );
+  const ids = (tickets || []).map((t) => t.id);
+  const field = extras.ticketFields[0];
+  const lastUse = new Map();
+  if (ids.length) {
+    const used = await odoo.searchRead(
+      TIMESHEET_MODEL,
+      [["employee_id.user_id", "=", uid], [field, "in", ids]],
+      ["date", "project_id", "task_id", field, ...(extras.activityModel ? ["activity_type_id"] : [])],
+      { limit: 1000, order: "date desc, id desc" },
+    );
+    for (const l of used || []) {
+      const tid = relationId(l[field]);
+      if (!lastUse.has(tid)) lastUse.set(tid, l);
+    }
+  }
+  return {
+    disponible: true,
+    tickets: (tickets || []).map((t) => {
+      const last = lastUse.get(t.id);
+      return {
+        id: t.id,
+        nombre: t.name,
+        cliente: relationName(t.partner_id) || null,
+        equipo: relationName(t.team_id) || null,
+        etapa: relationName(t.stage_id) || null,
+        proyecto_ticket_id: relationId(t.project_id),
+        proyecto_ticket: relationName(t.project_id) || null,
+        ultimo_registro: last
+          ? {
+              fecha: last.date,
+              proyecto_id: relationId(last.project_id),
+              proyecto: relationName(last.project_id),
+              tarea_id: relationId(last.task_id),
+              tarea: relationName(last.task_id) || null,
+              ...(extras.activityModel
+                ? { tipo_actividad_id: relationId(last.activity_type_id), tipo_actividad: relationName(last.activity_type_id) || null }
+                : {}),
+            }
+          : null,
+      };
+    }),
+  };
+}
+
 /** consultar_mis_horas */
-export async function listMyTimesheets(odoo, { uid, desde, hasta, limit } = {}) {
+export async function listMyTimesheets(odoo, { uid, desde, hasta, limit } = {}, extras = null) {
   requireIsoDate(desde, "desde");
   requireIsoDate(hasta, "hasta");
   if (desde > hasta) {
     throw new AppError(400, "invalid_range", "La fecha 'desde' no puede ser posterior a 'hasta'.");
   }
-  const lines = await readOwnTimesheets(odoo, uid, desde, hasta, clampLimit(limit, 500, 2000));
+  const ticketField = extras?.ticketFields?.[0];
+  const lines = await readOwnTimesheets(odoo, uid, desde, hasta, clampLimit(limit, 500, 2000), extras);
   const porDia = {};
   let total = 0;
   const lineas = (lines || []).map((l) => {
@@ -182,6 +305,8 @@ export async function listMyTimesheets(odoo, { uid, desde, hasta, limit } = {}) 
       tarea: relationName(l.task_id) || null,
       descripcion: l.name,
       horas,
+      ...(extras?.activityModel ? { tipo_actividad: relationName(l.activity_type_id) || null } : {}),
+      ...(ticketField ? { ticket_id: relationId(l[ticketField]), ticket: relationName(l[ticketField]) || null } : {}),
     };
   });
   return { desde, hasta, total_horas: total, horas_por_dia: porDia, lineas };
@@ -228,25 +353,38 @@ export function normalizeTimesheetLines(rawLines, { today, timeZone = DEFAULT_TI
     if (!description) {
       throw new AppError(400, "missing_description", `${pos}: la descripción es obligatoria.`);
     }
+    const optionalId = (value, field, code) => {
+      if (value === undefined || value === null) return null;
+      const id = positiveInt(value);
+      if (!id) throw new AppError(400, code, `${pos}: ${field} debe ser un entero positivo.`);
+      return id;
+    };
     return {
       date,
       projectId,
       taskId,
       hours: roundHours(hours),
       description: description.slice(0, 500),
+      activityTypeId: optionalId(raw.tipo_actividad_id, "tipo_actividad_id", "invalid_activity_type_id"),
+      ticketId: optionalId(raw.ticket_id, "ticket_id", "invalid_ticket_id"),
     };
   });
 }
 
 /** Valores exactos que se envían a Odoo. Sin employee_id: Odoo usa el empleado del usuario de la API key. */
-export function buildTimesheetValues(line) {
-  return {
+export function buildTimesheetValues(line, extras = null) {
+  const values = {
     project_id: line.projectId,
     ...(line.taskId ? { task_id: line.taskId } : {}),
     date: line.date,
     unit_amount: line.hours,
     name: line.description,
   };
+  if (line.activityTypeId) values.activity_type_id = line.activityTypeId;
+  if (line.ticketId) {
+    for (const field of extras?.ticketFields || []) values[field] = line.ticketId;
+  }
+  return values;
 }
 
 /**
@@ -280,8 +418,42 @@ export async function prepareTimesheetRegistration(odoo, rawLines, {
     : [];
   const taskById = new Map((tasks || []).map((t) => [t.id, t]));
 
+  // Tipo de actividad (obligatorio si la base lo tiene) y ticket de Helpdesk.
+  const extras = await detectTimesheetExtras(odoo);
+  const activityIds = [...new Set(lines.map((l) => l.activityTypeId).filter(Boolean))];
+  let activityById = new Map();
+  if (extras.activityModel) {
+    const missing = lines.findIndex((l) => !l.activityTypeId);
+    if (missing >= 0) {
+      throw new AppError(400, "activity_type_required", `línea ${missing + 1}: tipo_actividad_id es obligatorio en esta base (consulta consultar_tipos_actividad).`);
+    }
+    const rows = await odoo.searchRead(extras.activityModel, [["id", "in", activityIds]], ["id", "name"], { limit: activityIds.length });
+    activityById = new Map((rows || []).map((r) => [r.id, r]));
+  } else if (activityIds.length) {
+    throw new AppError(400, "activity_type_unsupported", "Esta base no tiene tipo de actividad en los partes de horas.");
+  }
+  const ticketIds = [...new Set(lines.map((l) => l.ticketId).filter(Boolean))];
+  let ticketById = new Map();
+  if (ticketIds.length) {
+    if (!extras.ticketFields.length) {
+      throw new AppError(400, "tickets_unsupported", "Esta base no vincula partes de horas con tickets de Helpdesk.");
+    }
+    const rows = await odoo.searchRead("helpdesk.ticket", [["id", "in", ticketIds]], ["id", "name"], { limit: ticketIds.length });
+    ticketById = new Map((rows || []).map((r) => [r.id, r]));
+  }
+
   for (const [index, line] of lines.entries()) {
     const pos = `línea ${index + 1}`;
+    if (line.activityTypeId) {
+      const activity = activityById.get(line.activityTypeId);
+      if (!activity) throw new AppError(404, "activity_type_not_found", `${pos}: el tipo de actividad ${line.activityTypeId} no existe.`);
+      line.activityName = activity.name;
+    }
+    if (line.ticketId) {
+      const ticket = ticketById.get(line.ticketId);
+      if (!ticket) throw new AppError(404, "ticket_not_found", `${pos}: el ticket ${line.ticketId} no existe o no es visible para tu usuario.`);
+      line.ticketName = ticket.name;
+    }
     const project = projectById.get(line.projectId);
     if (!project) {
       throw new AppError(404, "project_not_found", `${pos}: el proyecto ${line.projectId} no existe o no es visible para tu usuario.`);
@@ -356,12 +528,17 @@ export async function prepareTimesheetRegistration(odoo, rawLines, {
     skipped,
     existingHoursByDate,
     newHoursByDate,
+    extras,
   };
 }
 
 function lineLabel(line) {
   const target = line.taskName ? `${line.projectName} / ${line.taskName}` : line.projectName || `proyecto ${line.projectId}`;
-  return `${line.date} | ${target} | ${line.hours} h | ${line.description}`;
+  const extra = [
+    line.activityName ? `tipo: ${line.activityName}` : null,
+    line.ticketName ? `ticket: ${line.ticketName}` : null,
+  ].filter(Boolean);
+  return `${line.date} | ${target} | ${line.hours} h | ${line.description}${extra.length ? ` | ${extra.join(" | ")}` : ""}`;
 }
 
 export function summarizePreparation(prep) {
@@ -398,6 +575,8 @@ export function publicLine(line) {
     tarea: line.taskName ?? null,
     horas: line.hours,
     descripcion: line.description,
+    ...(line.activityTypeId ? { tipo_actividad_id: line.activityTypeId, tipo_actividad: line.activityName ?? null } : {}),
+    ...(line.ticketId ? { ticket_id: line.ticketId, ticket: line.ticketName ?? null } : {}),
     ...(line.motivo ? { motivo: line.motivo } : {}),
     ...(line.odoo_id ? { odoo_id: line.odoo_id } : {}),
   };
@@ -417,7 +596,7 @@ export async function executeTimesheetRegistration(odoo, prep) {
   const created = [];
   for (const line of prep.toCreate) {
     try {
-      const result = await odoo.create(TIMESHEET_MODEL, buildTimesheetValues(line), TIMESHEET_CONTEXT);
+      const result = await odoo.create(TIMESHEET_MODEL, buildTimesheetValues(line, prep.extras), TIMESHEET_CONTEXT);
       created.push({ ...publicLine(line), odoo_id: extractCreatedId(result) });
     } catch (error) {
       return {

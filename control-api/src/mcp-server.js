@@ -8,6 +8,9 @@ import {
   executeTimesheetRegistration,
   listMyTimesheets,
   listTimesheetProjectsTasks,
+  listActivityTypes,
+  listMyTickets,
+  detectTimesheetExtras,
   normalizeTimesheetLines,
   prepareTimesheetRegistration,
   publicLine,
@@ -35,6 +38,8 @@ export const READ_ONLY_TOOLS = new Set([
   "validar_tablero",
   "consultar_mis_proyectos_tareas",
   "consultar_mis_horas",
+  "consultar_tipos_actividad",
+  "consultar_mis_tickets",
 ]);
 
 // Escrituras que pueden habilitarse en modo carpeta local (sin BD de control) mediante
@@ -479,7 +484,26 @@ export const MCP_TOOLS = [
         query: { type: "string", description: "Texto a buscar en el nombre del proyecto o de la tarea (ilike)" },
         proyecto_id: { type: "integer", description: "Limitar a un proyecto concreto" },
         incluir_cerradas: { type: "boolean", default: false, description: "Incluir tareas terminadas o canceladas" },
+        solo_favoritos: { type: "boolean", default: false, description: "Solo proyectos marcados como favoritos por el usuario (búsqueda habitual)" },
         limit: { type: "integer", minimum: 1, maximum: 200, default: 80 },
+      },
+    },
+  },
+  {
+    name: "consultar_tipos_actividad",
+    description: "Lista los tipos de actividad que se pueden asignar a una línea de horas (solo lectura).",
+    inputSchema: { type: "object", additionalProperties: false, properties: {} },
+  },
+  {
+    name: "consultar_mis_tickets",
+    description:
+      "Lista los tickets de Helpdesk abiertos asignados al usuario, con el proyecto/tarea y tipo de actividad de su último registro de horas (solo lectura).",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        query: { type: "string", description: "Texto a buscar en el nombre del ticket o del cliente" },
+        limit: { type: "integer", minimum: 1, maximum: 200, default: 50 },
       },
     },
   },
@@ -524,6 +548,14 @@ export const MCP_TOOLS = [
               tarea_id: { type: "integer", description: "ID de project.task (opcional)" },
               horas: { type: "number", exclusiveMinimum: 0, maximum: 12, description: "Horas decimales (1.5 = 1 h 30 min)" },
               descripcion: { type: "string", maxLength: 500, description: "Descripción de la actividad" },
+              tipo_actividad_id: {
+                type: "integer",
+                description: "Tipo de actividad (consultar_tipos_actividad). Obligatorio si la base lo tiene.",
+              },
+              ticket_id: {
+                type: "integer",
+                description: "Ticket de Helpdesk al que se imputan las horas (consultar_mis_tickets), opcional",
+              },
             },
           },
         },
@@ -637,6 +669,7 @@ export class McpServer {
   #elicitationByToolCall = new Map();
   #pendingLocalConfirmations = new Map();
   #currentUid = null;
+  #timesheetExtras = null;
 
   constructor({
     odoo,
@@ -944,7 +977,14 @@ export class McpServer {
     }
     if (name === "consultar_mis_horas") {
       const uid = await this.#resolveUid();
-      return listMyTimesheets(this.odoo, { uid, desde: args?.desde, hasta: args?.hasta, limit: args?.limit });
+      return listMyTimesheets(this.odoo, { uid, desde: args?.desde, hasta: args?.hasta, limit: args?.limit }, await this.#extras());
+    }
+    if (name === "consultar_tipos_actividad") {
+      return listActivityTypes(this.odoo, await this.#extras());
+    }
+    if (name === "consultar_mis_tickets") {
+      const uid = await this.#resolveUid();
+      return listMyTickets(this.odoo, { uid, query: args?.query, limit: args?.limit }, await this.#extras());
     }
     if (name === "registrar_horas") {
       if (this.db) {
@@ -1070,6 +1110,11 @@ export class McpServer {
     }
 
     return result;
+  }
+
+  async #extras() {
+    if (!this.#timesheetExtras) this.#timesheetExtras = await detectTimesheetExtras(this.odoo);
+    return this.#timesheetExtras;
   }
 
   async #resolveUid() {
