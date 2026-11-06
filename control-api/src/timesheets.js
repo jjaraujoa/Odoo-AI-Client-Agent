@@ -139,8 +139,12 @@ export async function listTimesheetProjectsTasks(odoo, args = {}) {
 
   const taskBase = [["project_id.allow_timesheets", "=", true]];
   if (onlyFavorites) taskBase.push(["project_id.is_favorite", "=", true]);
-  if (projectId) taskBase.push(["project_id", "=", projectId]);
-  else if (query) taskBase.push("|", ["name", "ilike", query], ["project_id.name", "ilike", query]);
+  if (projectId) {
+    taskBase.push(["project_id", "=", projectId]);
+    if (query) taskBase.push(["name", "ilike", query]);
+  } else if (query) {
+    taskBase.push("|", ["name", "ilike", query], ["project_id.name", "ilike", query]);
+  }
 
   const includeClosed = args.incluir_cerradas === true;
   const taskFields = ["id", "name", "project_id", "stage_id"];

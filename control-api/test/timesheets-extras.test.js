@@ -141,3 +141,10 @@ test("solo_favoritos filtra proyectos y tareas por is_favorite; la búsqueda inc
   const task = odoo.reads.find((r) => r.model === "project.task");
   assert.ok(task.domain.some((d) => Array.isArray(d) && d[0] === "project_id.is_favorite"));
 });
+
+test("con proyecto_id, query filtra las tareas de ese proyecto por nombre", async () => {
+  const odoo = mockOdoo();
+  await listTimesheetProjectsTasks(odoo, { proyecto_id: 854, query: "interno" });
+  const task = odoo.reads.find((r) => r.model === "project.task");
+  assert.deepEqual(task.domain.slice(0, 3), [["project_id.allow_timesheets", "=", true], ["project_id", "=", 854], ["name", "ilike", "interno"]]);
+});
